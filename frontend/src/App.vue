@@ -15,33 +15,6 @@ const authStore = useAuthStore()
 const subscriptionStore = useSubscriptionStore()
 const announcementStore = useAnnouncementStore()
 
-/**
- * Update favicon dynamically
- * @param logoUrl - URL of the logo to use as favicon
- */
-function updateFavicon(logoUrl: string) {
-  // Find existing favicon link or create new one
-  let link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
-  if (!link) {
-    link = document.createElement('link')
-    link.rel = 'icon'
-    document.head.appendChild(link)
-  }
-  link.type = logoUrl.endsWith('.svg') ? 'image/svg+xml' : 'image/x-icon'
-  link.href = logoUrl
-}
-
-// Watch for site settings changes and update favicon/title
-watch(
-  () => appStore.siteLogo,
-  (newLogo) => {
-    if (newLogo) {
-      updateFavicon(newLogo)
-    }
-  },
-  { immediate: true }
-)
-
 // Watch for authentication state and manage subscription data + announcements
 function onVisibilityChange() {
   if (document.visibilityState === 'visible' && authStore.isAuthenticated) {

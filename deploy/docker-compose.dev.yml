@@ -1,17 +1,17 @@
 # =============================================================================
 # Sub2API Docker Compose - Local Development Build
 # =============================================================================
-# Build from local source code for testing changes.
+# Build backend only from local source code for frontend development.
 #
 # Usage:
 #   cd deploy
-#   docker compose -f docker-compose.dev.yml up --build
+#   docker compose -f docker-compose.dev.yml up -d --build
 # =============================================================================
 
 services:
   sub2api:
     build:
-      context: ..
+      context: ../backend
       dockerfile: Dockerfile
     container_name: sub2api-dev
     restart: unless-stopped
@@ -66,7 +66,7 @@ services:
     container_name: sub2api-postgres-dev
     restart: unless-stopped
     volumes:
-      - ./postgres_data:/var/lib/postgresql/data
+      - ./postgres_data:/var/lib/postgresql
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-sub2api}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}

@@ -66,7 +66,6 @@ const messages: Record<string, string> = {
   'keyUsage.querySuccess': 'Query successful',
   'keyUsage.queryFailed': 'Query failed',
   'keyUsage.queryFailedRetry': 'Query failed, please try again later',
-  'home.viewDocs': 'Docs',
   'home.switchToLight': 'Light',
   'home.switchToDark': 'Dark',
   'home.footer.allRightsReserved': 'All rights reserved.',
@@ -86,7 +85,7 @@ vi.mock('vue-i18n', async () => {
 vi.mock('@/stores', () => ({
   useAppStore: () => ({
     cachedPublicSettings: null,
-    siteName: 'Sub2API',
+    siteName: 'gptplusch',
     siteLogo: '',
     docUrl: '',
     publicSettingsLoaded: true,

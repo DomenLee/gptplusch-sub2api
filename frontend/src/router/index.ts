@@ -1,5 +1,5 @@
 /**
- * Vue Router configuration for Sub2API frontend
+ * Vue Router configuration for gptplusch frontend
  * Defines all application routes with lazy loading and navigation guards
  */
 
@@ -9,6 +9,7 @@ import { useAppStore } from '@/stores/app'
 import { useAdminSettingsStore } from '@/stores/adminSettings'
 import { useNavigationLoadingState } from '@/composables/useNavigationLoading'
 import { useRoutePrefetch } from '@/composables/useRoutePrefetch'
+import { resolveSiteName } from '@/constants/site'
 import { getSetupStatus } from '@/api/setup'
 import { resolveCompletedSetupRedirectPath } from './setupRedirect'
 import { resolveDocumentTitle } from './title'
@@ -739,7 +740,7 @@ router.beforeEach(async (to, _from, next) => {
     const menuItem = publicItems.find((item) => item.id === id)
       ?? (authStore.isAdmin ? adminSettingsStore.customMenuItems.find((item) => item.id === id) : undefined)
     if (menuItem?.label) {
-      const siteName = appStore.siteName || 'Sub2API'
+      const siteName = resolveSiteName(appStore.siteName)
       document.title = `${menuItem.label} - ${siteName}`
     } else {
       document.title = resolveDocumentTitle(to.meta.title, appStore.siteName, to.meta.titleKey as string)

@@ -1077,6 +1077,7 @@ import {
   buildCcSwitchImportDeeplink,
   type CcSwitchClientType
 } from '@/utils/ccswitchImport'
+import { resolveSiteName } from '@/constants/site'
 
 // Helper to format date for datetime-local input
 const formatDateTimeLocal = (isoDate: string): string => {
@@ -1724,7 +1725,7 @@ const executeCcsImport = (row: ApiKey, clientType: CcSwitchClientType) => {
       };
     }
   })`
-  const providerName = (publicSettings.value?.site_name || 'sub2api').trim() || 'sub2api'
+  const providerName = resolveSiteName(publicSettings.value?.site_name)
   const deeplink = buildCcSwitchImportDeeplink({
     baseUrl,
     platform,

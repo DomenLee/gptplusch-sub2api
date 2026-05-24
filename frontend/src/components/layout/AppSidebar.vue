@@ -3,19 +3,18 @@
     class="sidebar"
     :class="[
       sidebarCollapsed ? 'w-[72px]' : 'w-64',
-      { '-translate-x-full lg:translate-x-0': !mobileOpen }
+      { '-translate-x-[calc(100%+1rem)] lg:translate-x-0': !mobileOpen }
     ]"
   >
     <!-- Logo/Brand -->
     <div class="sidebar-header" :class="{ 'sidebar-header-collapsed': sidebarCollapsed }">
-      <!-- Custom Logo or Default Logo -->
-      <div class="sidebar-logo flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl shadow-glow">
-        <img v-if="settingsLoaded" :src="siteLogo || '/logo.png'" alt="Logo" class="h-full w-full object-contain" />
-      </div>
+      <BrandWordmark
+        v-if="settingsLoaded"
+        :name="sidebarCollapsed ? compactSiteName : siteName"
+        class="sidebar-logo flex h-9 items-center overflow-hidden text-2xl font-bold text-gray-900 shadow-none dark:text-white"
+        :class="sidebarCollapsed ? 'w-9 justify-center text-xl' : 'w-32 justify-start'"
+      />
       <div class="sidebar-brand" :class="{ 'sidebar-brand-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">
-        <span class="sidebar-brand-title text-lg font-bold text-gray-900 dark:text-white">
-          {{ siteName }}
-        </span>
         <!-- Version Badge -->
         <VersionBadge :version="siteVersion" />
       </div>
@@ -184,6 +183,7 @@ import { computed, h, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAdminSettingsStore, useAppStore, useAuthStore, useOnboardingStore } from '@/stores'
+import BrandWordmark from '@/components/common/BrandWordmark.vue'
 import VersionBadge from '@/components/common/VersionBadge.vue'
 import { sanitizeSvg } from '@/utils/sanitize'
 import { FeatureFlags, makeSidebarFlag } from '@/utils/featureFlags'
@@ -243,7 +243,7 @@ const expandedGroups = ref<Set<string>>(new Set())
 
 // Site settings from appStore (cached, no flicker)
 const siteName = computed(() => appStore.siteName)
-const siteLogo = computed(() => appStore.siteLogo)
+const compactSiteName = computed(() => siteName.value.charAt(0).toLowerCase())
 const siteVersion = computed(() => appStore.siteVersion)
 const settingsLoaded = computed(() => appStore.publicSettingsLoaded)
 
@@ -894,8 +894,8 @@ onMounted(() => {
 
 <style scoped>
 .sidebar-logo {
-  flex: 0 0 2.25rem;
-  min-width: 2.25rem;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .sidebar-header-collapsed {

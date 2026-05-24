@@ -6,7 +6,7 @@
         <h2 class="text-2xl font-bold text-gray-900 dark:text-white">
           {{ t('auth.createAccount') }}
         </h2>
-        <p class="mt-2 text-sm text-gray-500 dark:text-dark-400">
+        <p class="brand-serif mt-2 text-sm text-gray-500 dark:text-dark-400">
           {{ t('auth.signUpToStart', { siteName }) }}
         </p>
       </div>
@@ -327,6 +327,7 @@ import {
   loadAffiliateReferralCode,
   resolveAffiliateReferralCode
 } from '@/utils/oauthAffiliate'
+import { DEFAULT_SITE_NAME, resolveSiteName } from '@/constants/site'
 import type { LoginAgreementDocument } from '@/types'
 
 const { t, locale } = useI18n()
@@ -353,7 +354,7 @@ const promoCodeEnabled = ref<boolean>(true)
 const invitationCodeEnabled = ref<boolean>(false)
 const turnstileEnabled = ref<boolean>(false)
 const turnstileSiteKey = ref<string>('')
-const siteName = ref<string>('Sub2API')
+const siteName = ref<string>(DEFAULT_SITE_NAME)
 const linuxdoOAuthEnabled = ref<boolean>(false)
 const wechatOAuthEnabled = ref<boolean>(false)
 const oidcOAuthEnabled = ref<boolean>(false)
@@ -461,7 +462,7 @@ onMounted(async () => {
     invitationCodeEnabled.value = settings.invitation_code_enabled
     turnstileEnabled.value = settings.turnstile_enabled
     turnstileSiteKey.value = settings.turnstile_site_key || ''
-    siteName.value = settings.site_name || 'Sub2API'
+    siteName.value = resolveSiteName(settings.site_name)
     linuxdoOAuthEnabled.value = settings.linuxdo_oauth_enabled
     wechatOAuthEnabled.value = isWeChatWebOAuthEnabled(settings)
     oidcOAuthEnabled.value = settings.oidc_oauth_enabled
