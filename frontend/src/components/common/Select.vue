@@ -7,7 +7,9 @@
       :disabled="disabled"
       :aria-expanded="isOpen"
       :aria-haspopup="true"
-      aria-label="Select option"
+      :id="id"
+      :aria-label="ariaLabel ?? 'Select option'"
+      :aria-describedby="ariaDescribedby"
       :class="[
         'select-trigger',
         isOpen && 'select-trigger-open',
@@ -21,6 +23,18 @@
         <slot name="selected" :option="selectedOption">
           {{ selectedLabel }}
         </slot>
+      </span>
+      <span
+        v-if="clearable && hasValue && !disabled"
+        class="select-clear"
+        role="button"
+        tabindex="-1"
+        aria-label="Clear selection"
+        @click.stop="clearSelection"
+        @mousedown.stop
+        @keydown.enter.stop.prevent="clearSelection"
+      >
+        <Icon name="x" size="sm" />
       </span>
       <span class="select-icon">
         <Icon
@@ -53,6 +67,7 @@
               v-model="searchQuery"
               type="text"
               :placeholder="searchPlaceholderText"
+              :aria-label="searchPlaceholderText"
               class="select-search-input"
               @click.stop
             />
@@ -135,6 +150,10 @@ interface Props {
   labelKey?: string
   creatable?: boolean
   creatablePrefix?: string
+  clearable?: boolean
+  id?: string
+  ariaLabel?: string
+  ariaDescribedby?: string
 }
 
 interface Emits {
@@ -148,6 +167,7 @@ const props = withDefaults(defineProps<Props>(), {
   searchable: 'auto',
   creatable: false,
   creatablePrefix: '',
+  clearable: false,
   valueKey: 'value',
   labelKey: 'label'
 })
@@ -238,6 +258,10 @@ const selectedLabel = computed(() => {
   }
   return placeholderText.value
 })
+
+const hasValue = computed(
+  () => props.modelValue !== null && props.modelValue !== undefined && props.modelValue !== ''
+)
 
 const filteredOptions = computed(() => {
   let opts = props.options as any[]
@@ -355,6 +379,12 @@ const selectOption = (option: any) => {
   triggerRef.value?.focus()
 }
 
+const clearSelection = () => {
+  if (props.disabled) return
+  emit('update:modelValue', null)
+  emit('change', null, null)
+}
+
 // Keyboards
 const onTriggerKeyDown = () => {
   if (!isOpen.value) {
@@ -461,6 +491,12 @@ onUnmounted(() => {
 .select-icon {
   @apply flex-shrink-0 text-gray-400 dark:text-dark-400;
 }
+
+.select-clear {
+  @apply flex flex-shrink-0 cursor-pointer items-center justify-center;
+  @apply rounded text-gray-400 transition-colors;
+  @apply hover:text-gray-600 dark:hover:text-gray-200;
+}
 </style>
 
 <style>
@@ -487,7 +523,7 @@ onUnmounted(() => {
 }
 
 .select-dropdown-portal .select-options {
-  @apply max-h-60 overflow-y-auto py-1 outline-none;
+  @apply max-h-80 overflow-y-auto py-1 outline-none;
 }
 
 .select-dropdown-portal .select-option {

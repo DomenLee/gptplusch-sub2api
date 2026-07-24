@@ -1,16 +1,95 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+type ingressRejectSettingRepo struct {
+	service.SettingRepository
+	getValueCalls int
+}
+
+func (r *ingressRejectSettingRepo) GetValue(context.Context, string) (string, error) {
+	r.getValueCalls++
+	return "", service.ErrSettingNotFound
+}
+
+func (r *ingressRejectSettingRepo) GetMultiple(context.Context, []string) (map[string]string, error) {
+	r.getValueCalls++
+	return map[string]string{}, nil
+}
+
+func (r *ingressRejectSettingRepo) Set(context.Context, string, string) error {
+	return nil
+}
+
+type ingressRejectOpsRepo struct {
+	service.OpsRepository
+	insertCalls int
+}
+
+func (r *ingressRejectOpsRepo) InsertErrorLog(context.Context, *service.OpsInsertErrorLogInput) (int64, error) {
+	r.insertCalls++
+	return 0, nil
+}
+
+func (r *ingressRejectOpsRepo) BatchInsertErrorLogs(context.Context, []*service.OpsInsertErrorLogInput) (int64, error) {
+	r.insertCalls++
+	return 0, nil
+}
+
+func TestOpsErrorLogQueueByteBudget(t *testing.T) {
+	previousBytes := opsErrorLogQueueBytes.Load()
+	previousLen := opsErrorLogQueueLen.Load()
+	opsErrorLogQueueBytes.Store(0)
+	opsErrorLogQueueLen.Store(0)
+	t.Cleanup(func() {
+		opsErrorLogQueueBytes.Store(previousBytes)
+		opsErrorLogQueueLen.Store(previousLen)
+	})
+
+	if !reserveOpsErrorLogQueueBytes(opsErrorLogMaxQueueBytes - 1) {
+		t.Fatal("first reservation within byte budget should succeed")
+	}
+	if reserveOpsErrorLogQueueBytes(2) {
+		t.Fatal("reservation beyond byte budget should be rejected")
+	}
+	if got := OpsErrorLogQueueBytes(); got != opsErrorLogMaxQueueBytes-1 {
+		t.Fatalf("queued bytes = %d, want %d", got, opsErrorLogMaxQueueBytes-1)
+	}
+	if got := OpsErrorLogQueueLength(); got != 1 {
+		t.Fatalf("queue length = %d, want 1", got)
+	}
+}
+
+func TestEstimateOpsErrorLogJobBytesIncludesVariablePayloads(t *testing.T) {
+	base := estimateOpsErrorLogJobBytes(&service.OpsInsertErrorLogInput{})
+	message := "upstream message"
+	detail := "upstream detail"
+	events := `[{"error":"x"}]`
+	entry := &service.OpsInsertErrorLogInput{
+		ErrorBody:            strings.Repeat("x", 1024),
+		ErrorMessage:         "client error",
+		UserAgent:            "test-agent",
+		UpstreamErrorMessage: &message,
+		UpstreamErrorDetail:  &detail,
+		UpstreamErrorsJSON:   &events,
+	}
+	if got := estimateOpsErrorLogJobBytes(entry); got <= base+1024 {
+		t.Fatalf("estimated bytes = %d, expected variable payloads above %d", got, base+1024)
+	}
+}
 
 func resetOpsErrorLoggerStateForTest(t *testing.T) {
 	t.Helper()
@@ -119,6 +198,29 @@ func TestOpsCaptureWriterPool_ResetOnRelease(t *testing.T) {
 	require.Zero(t, reused.buf.Len(), "writer should be reset before reuse")
 }
 
+func TestOpsCaptureWriterPool_DropsLargeBuffers(t *testing.T) {
+	w := &opsCaptureWriter{}
+	w.buf.Grow(opsCaptureWriterPoolMaxRetainedCapacity + 1)
+	require.False(t, shouldPoolOpsCaptureWriter(w))
+}
+
+func TestEnqueueOpsErrorLog_SanitizesAndBoundsBodyBeforeQueue(t *testing.T) {
+	setupOpsErrorLogTestQueue(t, 1)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	secret := strings.Repeat("s", service.OpsErrorLogQueueBodyMaxBytes)
+	entry := &service.OpsInsertErrorLogInput{
+		ErrorPhase: "request",
+		ErrorType:  "api_error",
+		ErrorBody:  `{"authorization":"Bearer ` + secret + `","message":"failed"}`,
+	}
+
+	enqueueOpsErrorLog(ops, entry)
+	job := <-opsErrorLogQueue
+	require.LessOrEqual(t, len(job.entry.ErrorBody), service.OpsErrorLogQueueBodyMaxBytes)
+	require.NotContains(t, job.entry.ErrorBody, secret)
+	require.Equal(t, int64(1), OpsErrorLogSanitizedTotal())
+}
+
 func TestOpsErrorLoggerMiddleware_DoesNotBreakOuterMiddlewares(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -137,6 +239,163 @@ func TestOpsErrorLoggerMiddleware_DoesNotBreakOuterMiddlewares(t *testing.T) {
 		r.ServeHTTP(rec, req)
 	})
 	require.Equal(t, http.StatusNoContent, rec.Code)
+}
+
+// setupOpsErrorLogTestQueue 阻止 enqueueOpsErrorLog 启动真实 worker，改用可检查的测试队列。
+func setupOpsErrorLogTestQueue(t *testing.T, size int) {
+	t.Helper()
+	resetOpsErrorLoggerStateForTest(t)
+	opsErrorLogOnce.Do(func() {})
+	opsErrorLogMu.Lock()
+	opsErrorLogQueue = make(chan opsErrorLogJob, size)
+	opsErrorLogMu.Unlock()
+}
+
+func TestOpsErrorLoggerMiddleware_HardSkipsIngressRejection(t *testing.T) {
+	setupOpsErrorLogTestQueue(t, 4)
+	gin.SetMode(gin.TestMode)
+
+	settings := &ingressRejectSettingRepo{}
+	repo := &ingressRejectOpsRepo{}
+	ops := service.NewOpsService(repo, settings, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	// Construction may read unrelated runtime settings; only request-path reads matter here.
+	settings.getValueCalls = 0
+
+	router := gin.New()
+	router.Use(OpsErrorLoggerMiddleware(ops))
+	router.GET("/v1/messages", func(c *gin.Context) {
+		middleware2.MarkIngressRejected(c, middleware2.IngressRejectInvalidAPIKey)
+		c.JSON(http.StatusUnauthorized, gin.H{"code": "INVALID_API_KEY", "message": "Invalid API key"})
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/messages", nil)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+	require.JSONEq(t, `{"code":"INVALID_API_KEY","message":"Invalid API key"}`, w.Body.String())
+	require.Zero(t, settings.getValueCalls, "ingress rejection must bypass monitoring settings reads")
+	require.Zero(t, repo.insertCalls, "ingress rejection must bypass inserts")
+	require.Zero(t, OpsErrorLogEnqueuedTotal(), "ingress rejection must not enter the error queue")
+}
+
+func TestNormalizeOpsPersistentUserAgentBoundsAndPreservesUTF8(t *testing.T) {
+	value := strings.Repeat("a", opsErrorLogMaxUserAgentBytes-1) + "你" + strings.Repeat("b", 32)
+	got := normalizeOpsPersistentUserAgent("  " + value + "  ")
+	require.LessOrEqual(t, len(got), opsErrorLogMaxUserAgentBytes)
+	require.True(t, utf8.ValidString(got))
+	require.NotContains(t, got, "b")
+}
+
+// 就地(in-band) SSE 错误挂在已固化的 HTTP 200 流上：wire 状态码为 200，
+// 常规 status>=400 采集路径不会触发。logOpsStreamError 必须据 MarkOpsStreamError
+// 补记一条错误日志，且用 IntendedStatus(429) 分级、StatusCode 仍记 wire 的 200。
+func TestLogOpsStreamError_RecordsInBandConcurrencyLimit(t *testing.T) {
+	setupOpsErrorLogTestQueue(t, 4)
+
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Set(opsModelKey, "test-model")
+
+	service.MarkOpsStreamError(c, "rate_limit_error",
+		"Concurrency limit exceeded for account, please retry later", http.StatusTooManyRequests)
+
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	logOpsStreamError(c, ops, http.StatusOK)
+
+	require.Equal(t, int64(1), OpsErrorLogEnqueuedTotal())
+	require.Equal(t, int64(1), OpsErrorLogQueueLength())
+
+	job := <-opsErrorLogQueue
+	require.NotNil(t, job.entry)
+	require.Equal(t, "rate_limit_error", job.entry.ErrorType)
+	require.Equal(t, "request", job.entry.ErrorPhase)
+	require.True(t, job.entry.IsBusinessLimited)
+	require.True(t, job.entry.Stream)
+	require.Equal(t, http.StatusOK, job.entry.StatusCode) // wire 状态码保持 200
+	require.Equal(t, "P1", job.entry.Severity)            // 用 IntendedStatus 429 分级
+	require.Equal(t, "test-model", job.entry.Model)
+	require.Equal(t, "Concurrency limit exceeded for account, please retry later", job.entry.ErrorMessage)
+}
+
+func TestLogOpsStreamError_UpstreamFailureCountsTowardsSLA(t *testing.T) {
+	setupOpsErrorLogTestQueue(t, 4)
+
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Set(opsModelKey, "gpt-5.6-sol")
+
+	service.MarkOpsStreamFailure(
+		c,
+		"upstream_error",
+		service.OpenAIUpstreamHTTP2StreamErrorCode,
+		"Upstream HTTP/2 stream failed",
+		http.StatusBadGateway,
+	)
+
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	logOpsStreamError(c, ops, http.StatusOK)
+
+	job := <-opsErrorLogQueue
+	require.NotNil(t, job.entry)
+	require.Equal(t, http.StatusBadGateway, job.entry.StatusCode)
+	require.Equal(t, "upstream_error", job.entry.ErrorType)
+	require.Equal(t, "upstream", job.entry.ErrorPhase)
+	require.Equal(t, "provider", job.entry.ErrorOwner)
+	require.False(t, job.entry.IsBusinessLimited)
+	require.Contains(t, job.entry.ErrorBody, service.OpenAIUpstreamHTTP2StreamErrorCode)
+}
+
+// 未标记流内错误时 logOpsStreamError 必须是 no-op（不误记正常的 200 流）。
+func TestLogOpsStreamError_NoopWhenNotMarked(t *testing.T) {
+	setupOpsErrorLogTestQueue(t, 4)
+
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	logOpsStreamError(c, ops, http.StatusOK)
+
+	require.Equal(t, int64(0), OpsErrorLogEnqueuedTotal())
+}
+
+// 命中 skip_monitoring=true 透传规则时不落库，与其它采集分支一致。
+func TestLogOpsStreamError_SkipWhenPassthroughSkipMonitoring(t *testing.T) {
+	setupOpsErrorLogTestQueue(t, 4)
+
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	service.MarkOpsStreamError(c, "upstream_error", "Upstream request failed", http.StatusBadGateway)
+	c.Set(service.OpsSkipPassthroughKey, true)
+
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	logOpsStreamError(c, ops, http.StatusOK)
+
+	require.Equal(t, int64(0), OpsErrorLogEnqueuedTotal())
+}
+
+// MarkOpsStreamError 采用「首个标记生效」：后续的通用兜底帧不得覆盖根因错误。
+func TestMarkOpsStreamError_FirstWins(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+
+	service.MarkOpsStreamError(c, "rate_limit_error", "Concurrency limit exceeded for account", http.StatusTooManyRequests)
+	service.MarkOpsStreamError(c, "upstream_error", "Upstream request failed", http.StatusBadGateway)
+
+	se, ok := service.GetOpsStreamError(c)
+	require.True(t, ok)
+	require.Equal(t, "rate_limit_error", se.ErrType)
+	require.Equal(t, "Concurrency limit exceeded for account", se.Message)
+	require.Equal(t, http.StatusTooManyRequests, se.IntendedStatus)
 }
 
 func TestIsKnownOpsErrorType(t *testing.T) {
@@ -289,6 +548,34 @@ func TestClassifyOpsAuthClientErrorsExcludedFromSLA(t *testing.T) {
 			status:  http.StatusUnauthorized,
 		},
 		{
+			name:    "deleted local API key group",
+			errType: "api_error",
+			message: "API Key 所属分组已删除",
+			code:    "GROUP_DELETED",
+			status:  http.StatusForbidden,
+		},
+		{
+			name:    "disabled local API key group",
+			errType: "api_error",
+			message: "API Key 所属分组已停用",
+			code:    "GROUP_DISABLED",
+			status:  http.StatusForbidden,
+		},
+		{
+			name:    "google deleted API key group message without semantic code",
+			errType: "api_error",
+			message: "API Key 所属分组已删除",
+			code:    "403",
+			status:  http.StatusForbidden,
+		},
+		{
+			name:    "anthropic unassigned API key group",
+			errType: "permission_error",
+			message: "API Key is not assigned to any group and cannot be used. Please contact the administrator to assign it to a group.",
+			code:    "",
+			status:  http.StatusForbidden,
+		},
+		{
 			name:    "google invalid API key",
 			errType: "api_error",
 			message: "Invalid API key",
@@ -390,6 +677,15 @@ func TestClassifyOpsLocalBusinessLimitErrorsExcludedFromSLA(t *testing.T) {
 			wantPhase:   "request",
 		},
 		{
+			name:        "gateway subscription invalid cache recheck",
+			errType:     "billing_error",
+			message:     "subscription is invalid or expired",
+			code:        "billing_error",
+			status:      http.StatusForbidden,
+			wantErrType: "billing_error",
+			wantPhase:   "request",
+		},
+		{
 			name:        "google insufficient account balance",
 			errType:     "api_error",
 			message:     "Insufficient account balance",
@@ -443,6 +739,132 @@ func TestClassifyOpsLocalBusinessLimitErrorsExcludedFromSLA(t *testing.T) {
 			wantErrType: "api_error",
 			wantPhase:   "request",
 		},
+		{
+			name:        "user platform daily quota exhausted",
+			errType:     "api_error",
+			message:     "Daily usage quota exhausted for this platform.",
+			code:        "rate_limit_exceeded",
+			status:      http.StatusTooManyRequests,
+			wantErrType: "api_error",
+			wantPhase:   "request",
+		},
+		{
+			name:        "local pending queue limit",
+			errType:     "rate_limit_error",
+			message:     "Too many pending requests, please retry later",
+			code:        "",
+			status:      http.StatusTooManyRequests,
+			wantErrType: "rate_limit_error",
+			wantPhase:   "request",
+		},
+		{
+			name:        "local concurrency limit",
+			errType:     "rate_limit_error",
+			message:     "Concurrency limit exceeded for user, please retry later",
+			code:        "",
+			status:      http.StatusTooManyRequests,
+			wantErrType: "rate_limit_error",
+			wantPhase:   "request",
+		},
+		{
+			name:        "group claude code only feature gate",
+			errType:     "permission_error",
+			message:     "This group is restricted to Claude Code clients (/v1/messages only)",
+			code:        "",
+			status:      http.StatusForbidden,
+			wantErrType: "api_error",
+			wantPhase:   "request",
+		},
+		{
+			name:        "group image generation feature gate",
+			errType:     "permission_error",
+			message:     "Image generation is not enabled for this group",
+			code:        "",
+			status:      http.StatusForbidden,
+			wantErrType: "api_error",
+			wantPhase:   "request",
+		},
+		{
+			name:        "route token counting platform unsupported",
+			errType:     "not_found_error",
+			message:     "Token counting is not supported for this platform",
+			code:        "",
+			status:      http.StatusNotFound,
+			wantErrType: "not_found_error",
+			wantPhase:   "request",
+		},
+		{
+			name:        "route images API platform unsupported",
+			errType:     "not_found_error",
+			message:     "Images API is not supported for this platform",
+			code:        "",
+			status:      http.StatusNotFound,
+			wantErrType: "not_found_error",
+			wantPhase:   "request",
+		},
+		{
+			name:        "antigravity model whitelist feature gate",
+			errType:     "permission_error",
+			message:     "model claude-3-5-sonnet not in whitelist",
+			code:        "",
+			status:      http.StatusForbidden,
+			wantErrType: "api_error",
+			wantPhase:   "request",
+		},
+		{
+			name:        "google antigravity model whitelist feature gate",
+			errType:     "api_error",
+			message:     "model gemini-2.5-pro not in whitelist",
+			code:        "403",
+			status:      http.StatusForbidden,
+			wantErrType: "api_error",
+			wantPhase:   "request",
+		},
+		{
+			name:        "claude beta policy block",
+			errType:     "invalid_request_error",
+			message:     "beta feature interleaved-thinking-2025-05-14 is not allowed",
+			code:        "",
+			status:      http.StatusBadRequest,
+			wantErrType: "invalid_request_error",
+			wantPhase:   "request",
+		},
+		{
+			name:        "openai fast policy block",
+			errType:     "permission_error",
+			message:     "openai service_tier=priority is not allowed for model gpt-5.5",
+			code:        "",
+			status:      http.StatusForbidden,
+			wantErrType: "api_error",
+			wantPhase:   "request",
+		},
+		{
+			name:        "codex official client policy block",
+			errType:     "forbidden_error",
+			message:     "This account only allows Codex official clients",
+			code:        "",
+			status:      http.StatusForbidden,
+			wantErrType: "forbidden_error",
+			wantPhase:   "request",
+		},
+		{
+			name:        "openai wsv1 unsupported feature gate",
+			errType:     "invalid_request_error",
+			message:     "OpenAI WSv1 is temporarily unsupported. Please enable responses_websockets_v2.",
+			code:        "",
+			status:      http.StatusBadRequest,
+			wantErrType: "invalid_request_error",
+			wantPhase:   "request",
+		},
+		{
+			name:        "openai passthrough instructions policy block",
+			errType:     "forbidden_error",
+			message:     "OpenAI codex passthrough requires a non-empty instructions field",
+			code:        "",
+			status:      http.StatusForbidden,
+			wantErrType: "forbidden_error",
+			wantPhase:   "request",
+		},
 	}
 
 	for _, tt := range tests {
@@ -473,6 +895,22 @@ func TestClassifyOpsIPRestrictionAccessDeniedExcludedFromSLA(t *testing.T) {
 	phase, isBusinessLimited, errorOwner, errorSource := classifyOpsErrorLog(c, errType, "Access denied", "ACCESS_DENIED", http.StatusForbidden)
 
 	require.Equal(t, "api_error", errType)
+	require.Equal(t, "auth", phase)
+	require.True(t, isBusinessLimited)
+	require.Equal(t, "client", errorOwner)
+	require.Equal(t, "client_request", errorSource)
+}
+
+func TestClassifyOpsClientBusinessLimitedMarkerExcludesCustomPolicyDenialFromSLA(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalPolicyDenied)
+
+	errType := normalizeOpsErrorType("invalid_request_error", "")
+	phase, isBusinessLimited, errorOwner, errorSource := classifyOpsErrorLog(c, errType, "custom admin policy message", "", http.StatusBadRequest)
+
+	require.Equal(t, "invalid_request_error", errType)
 	require.Equal(t, "auth", phase)
 	require.True(t, isBusinessLimited)
 	require.Equal(t, "client", errorOwner)
@@ -583,6 +1021,78 @@ func TestClassifyOpsUpstreamAuthTextStillCountsForSLA(t *testing.T) {
 			code:    "API_KEY_QUOTA_EXHAUSTED",
 			status:  http.StatusTooManyRequests,
 		},
+		{
+			name:    "provider deleted group shaped error",
+			message: "API Key 所属分组已删除",
+			code:    "GROUP_DELETED",
+			status:  http.StatusForbidden,
+		},
+		{
+			name:    "provider unassigned group shaped error",
+			message: "API Key is not assigned to any group and cannot be used. Please contact the administrator to assign it to a group.",
+			code:    "403",
+			status:  http.StatusForbidden,
+		},
+		{
+			name:    "provider local quota shaped error",
+			message: "Daily usage quota exhausted for this platform.",
+			code:    "rate_limit_exceeded",
+			status:  http.StatusTooManyRequests,
+		},
+		{
+			name:    "provider feature gate shaped error",
+			message: "Image generation is not enabled for this group",
+			code:    "403",
+			status:  http.StatusForbidden,
+		},
+		{
+			name:    "provider token counting unsupported shaped error",
+			message: "Token counting is not supported for this platform",
+			code:    "404",
+			status:  http.StatusNotFound,
+		},
+		{
+			name:    "provider image API unsupported shaped error",
+			message: "Images API is not supported for this platform",
+			code:    "404",
+			status:  http.StatusNotFound,
+		},
+		{
+			name:    "provider antigravity whitelist shaped error",
+			message: "model claude-3-5-sonnet not in whitelist",
+			code:    "403",
+			status:  http.StatusForbidden,
+		},
+		{
+			name:    "provider beta policy shaped error",
+			message: "beta feature interleaved-thinking-2025-05-14 is not allowed",
+			code:    "400",
+			status:  http.StatusBadRequest,
+		},
+		{
+			name:    "provider openai fast policy shaped error",
+			message: "openai service_tier=priority is not allowed for model gpt-5.5",
+			code:    "403",
+			status:  http.StatusForbidden,
+		},
+		{
+			name:    "provider codex client policy shaped error",
+			message: "This account only allows Codex official clients",
+			code:    "403",
+			status:  http.StatusForbidden,
+		},
+		{
+			name:    "provider wsv1 unsupported shaped error",
+			message: "OpenAI WSv1 is temporarily unsupported. Please enable responses_websockets_v2.",
+			code:    "400",
+			status:  http.StatusBadRequest,
+		},
+		{
+			name:    "provider passthrough instructions shaped error",
+			message: "OpenAI codex passthrough requires a non-empty instructions field",
+			code:    "403",
+			status:  http.StatusForbidden,
+		},
 	}
 
 	for _, tt := range tests {
@@ -628,6 +1138,14 @@ func TestClassifyOpsUpstreamNoAvailableTextStillCountsForSLA(t *testing.T) {
 	require.Equal(t, "upstream_http", errorSource)
 }
 
+func TestParseOpsErrorResponsePreservesNestedStringCode(t *testing.T) {
+	parsed := parseOpsErrorResponse([]byte(`{"error":{"type":"permission_error","code":"GROUP_DELETED","message":"API Key 所属分组已删除"}}`))
+
+	require.Equal(t, "permission_error", parsed.ErrorType)
+	require.Equal(t, "GROUP_DELETED", parsed.Code)
+	require.Equal(t, "API Key 所属分组已删除", parsed.Message)
+}
+
 func TestSetOpsEndpointContext_SetsContextKeys(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
@@ -671,4 +1189,46 @@ func TestSetOpsEndpointContext_NilContext(t *testing.T) {
 	require.NotPanics(t, func() {
 		setOpsEndpointContext(nil, "model", int16(1))
 	})
+}
+
+func TestGetOpsAPIKeyFallsBackToOpsFallbackKey(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+
+	// 主 key 缺席（鉴权早退场景）：返回 nil。
+	require.Nil(t, getOpsAPIKey(c))
+
+	// 写入 ops 专用 fallback key 后应能取到，且带齐 user/group。
+	groupID := int64(55)
+	apiKey := &service.APIKey{
+		ID:      100,
+		GroupID: &groupID,
+		User:    &service.User{ID: 7},
+		Group:   &service.Group{ID: groupID, Platform: service.PlatformAnthropic},
+	}
+	c.Set(string(middleware2.ContextKeyOpsFallbackAPIKey), apiKey)
+
+	got := getOpsAPIKey(c)
+	require.NotNil(t, got)
+	require.Equal(t, int64(100), got.ID)
+	require.NotNil(t, got.User)
+	require.Equal(t, int64(7), got.User.ID)
+	require.NotNil(t, got.Group)
+	require.Equal(t, service.PlatformAnthropic, got.Group.Platform)
+}
+
+func TestGetOpsAPIKeyPrefersPrimaryContextKey(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+
+	primary := &service.APIKey{ID: 1}
+	fallback := &service.APIKey{ID: 2}
+	c.Set(string(middleware2.ContextKeyAPIKey), primary)
+	c.Set(string(middleware2.ContextKeyOpsFallbackAPIKey), fallback)
+
+	got := getOpsAPIKey(c)
+	require.NotNil(t, got)
+	require.Equal(t, int64(1), got.ID, "已鉴权请求应优先使用正式 api key")
 }
