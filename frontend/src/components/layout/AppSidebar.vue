@@ -16,8 +16,8 @@
       >
         <BrandWordmark
           :name="sidebarCollapsed ? compactSiteName : siteName"
-          class="sidebar-logo flex h-9 items-center overflow-hidden text-2xl font-bold text-gray-900 shadow-none dark:text-white"
-          :class="sidebarCollapsed ? 'w-9 justify-center text-xl' : 'w-32 justify-start'"
+          class="sidebar-logo flex h-9 items-center overflow-hidden font-bold text-gray-900 shadow-none dark:text-white"
+          :class="sidebarCollapsed ? 'w-9 justify-center text-xl' : 'w-32 justify-start text-[22px]'"
         />
       </router-link>
       <div class="sidebar-brand" :class="{ 'sidebar-brand-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">

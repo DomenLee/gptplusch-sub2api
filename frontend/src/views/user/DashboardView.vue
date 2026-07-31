@@ -32,6 +32,15 @@
                 @change="loadCharts"
               />
             </div>
+            <a
+              :href="purchaseUrl"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="dashboard-dark-pill"
+            >
+              <span>{{ t('dashboard.buyNow') }}</span>
+              <Icon name="externalLink" size="sm" />
+            </a>
             <button class="dashboard-dark-pill" :disabled="loadingCharts" @click="refreshAll">
               <span>{{ t('common.refresh') }}</span>
               <Icon name="refresh" size="sm" />
@@ -295,6 +304,7 @@ const loadingCharts = ref(false)
 const trendData = ref<TrendDataPoint[]>([])
 const modelStats = ref<ModelStat[]>([])
 const recentUsage = ref<UsageLog[]>([])
+const purchaseUrl = 'https://www.gptplusch.store/products?category=other'
 
 const formatLD = (d: Date) => d.toISOString().split('T')[0]
 const startDate = ref(formatLD(new Date(Date.now() - 6 * 86400000)))

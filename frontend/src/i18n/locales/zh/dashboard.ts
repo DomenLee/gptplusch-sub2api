@@ -47,6 +47,7 @@ export default {
     last7Days: '近 7 天',
     noUsageRecords: '暂无使用记录',
     startUsingApi: '开始使用 API 后，您的使用历史将显示在这里。',
+    buyNow: '去购买',
     viewAllUsage: '查看全部',
     quickActions: '快捷操作',
     createApiKey: '创建 API 密钥',

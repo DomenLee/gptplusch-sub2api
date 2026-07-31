@@ -47,6 +47,7 @@ export default {
     last7Days: 'Last 7 days',
     noUsageRecords: 'No usage records',
     startUsingApi: 'Start using the API to see your usage history here.',
+    buyNow: 'Buy now',
     viewAllUsage: 'View all usage',
     quickActions: 'Quick Actions',
     createApiKey: 'Create API Key',
