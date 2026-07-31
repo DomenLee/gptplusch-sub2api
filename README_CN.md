@@ -216,6 +216,10 @@ underscores_in_headers on;
 
 Nginx 默认会丢弃名称中含下划线的请求头（如 `session_id`），这会导致多账号环境下的粘性会话功能失效。
 
+如果你要接入 Cloudflare CDN，建议直接看这份说明：
+
+- [Cloudflare CDN 接入说明](docs/CLOUDFLARE_CN.md)
+
 ---
 
 ## 部署方式
