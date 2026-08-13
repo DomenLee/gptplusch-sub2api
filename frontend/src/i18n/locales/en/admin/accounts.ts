@@ -254,7 +254,7 @@ export default {
         enabled: 'On',
         disabled: 'Off',
         probeFailed: 'Failed to probe upstream rate',
-        noEligibleAccounts: 'Select OpenAI API key accounts',
+        noEligibleAccounts: 'Select API key accounts',
         batchLimit: 'A batch can probe at most 20 accounts',
         batchCompleted: 'Probed {count} account(s)',
         batchPartial: 'Probe partially completed: {success} succeeded, {failed} failed'
@@ -392,10 +392,16 @@ export default {
       bulkSchedulableResultUnknown: 'Bulk scheduling result incomplete. Please retry or refresh.',
       bulkActions: {
         selected: '{count} account(s) selected',
+        selectedAll: 'All {count} account(s) selected',
         selectCurrentPage: 'Select this page',
+        selectAllResults: 'Select all results ({count})',
+        selectingAll: 'Selecting all results...',
+        selectAllFailed: 'Failed to load all accounts. The previous selection was kept.',
         clear: 'Clear selection',
         edit: 'Bulk Edit',
         delete: 'Bulk Delete',
+        confirmDelete: 'Delete the selected {count} account(s)? This action cannot be undone.',
+        deleteSuccess: 'Deleted {count} account(s)',
         enableScheduling: 'Enable Scheduling',
         disableScheduling: 'Disable Scheduling',
         resetStatus: 'Reset Status',
@@ -495,6 +501,9 @@ export default {
         oauthPassthrough: 'Auto passthrough (auth only)',
         oauthPassthroughDesc:
           'When enabled, this OpenAI account uses automatic passthrough: the gateway forwards request/response as-is and only swaps auth, while keeping billing/concurrency/audit and necessary safety filtering.',
+        flattenNamespaces: 'Flatten Codex namespace tools (compatibility)',
+        flattenNamespacesDesc:
+          'Disabled by default: Codex namespace tool declarations are forwarded as-is on /responses, which is what the ChatGPT Codex backend expects. Enable only when this OAuth account is routed to a relay that rejects namespace tools — flattening renames them to namespace__tool, which breaks models that address collaboration tools as functions.<namespace>.<tool>. Compaction requests always flatten regardless of this switch.',
         longContextBilling: 'API long-context pricing',
         longContextBillingDesc:
           'Disabled by default. Enable only when this account\'s upstream charges OpenAI API long-context rates above the model threshold.',
@@ -1365,7 +1374,11 @@ export default {
         collapseExpirations: 'Collapse reset credit expirations',
         expirationDetails: 'Reset credit expiration details',
         noCreditsAvailable: 'No reset credits available',
-        resetSuccess: 'Reset {windows} window(s)',
+        resetSuccess: 'Reset {windows} window(s); credits and account state updated',
+        resetCacheRefreshFailed: 'The window was reset and account state recovered, but the reset-credit count could not be read back. Query it again.',
+        resetAccountRecoveryFailed: 'The window was reset, but account state recovery failed. Recover the account state manually.',
+        resetAccountRefreshFailed: 'The window, account state, and reset-credit cache were updated, but the latest account display could not be loaded.',
+        refreshCachePersistFailed: 'Showing the live count, but its expiration details were unavailable, so the cached details were kept.',
         confirmTitle: 'Confirm Weekly Limit Reset',
         confirmMessage: 'This will consume 1 reset credit to immediately restore the current window ({count} remaining). This action cannot be undone. Continue?'
       },
