@@ -129,6 +129,10 @@ code-reviews/
 AGENTS.md
 backend/cmd/server/server
 deploy/docker-compose.override.yml
+deploy/docker-compose.prod.yml
+deploy/docker-compose.prod.yml.pre-*
+deploy/release-backups/
+deploy/.docker-compose.target-*.yml
 .gocache/
 vite.config.js
 docs/*
