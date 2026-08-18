@@ -64,7 +64,7 @@ func (r *checkInRepository) GetUserStatus(ctx context.Context, userID int64, day
 	if err != nil {
 		return nil, fmt.Errorf("list check-in history: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var record service.CheckInRecord
 		if err := rows.Scan(&record.ID, &record.Date, &record.Reward, &record.Mode, &record.CycleRewardAfter, &record.CreatedAt); err != nil {
@@ -267,7 +267,7 @@ func (r *checkInRepository) GetAdminStats(ctx context.Context, day time.Time, da
 	if err != nil {
 		return nil, fmt.Errorf("load check-in trend: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var point service.CheckInTrendPoint
 		if err := rows.Scan(&point.Date, &point.Users, &point.Reward); err != nil {
