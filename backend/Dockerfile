@@ -1,4 +1,4 @@
-FROM golang:1.26.5-alpine
+FROM golang:1.26.6-alpine
 
 ARG GOPROXY=https://goproxy.cn,direct
 ARG GOSUMDB=sum.golang.google.cn
