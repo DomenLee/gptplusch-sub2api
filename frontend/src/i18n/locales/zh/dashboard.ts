@@ -486,6 +486,13 @@ export default {
     nextUpdateIn: '{n}s 后刷新',
     past: 'PAST',
     now: 'NOW',
+    timelineLegendAria: '状态记录颜色说明',
+    timelineLegendTitle: '状态记录',
+    timelineLegend: {
+      operational: '绿色：延迟正常',
+      degraded: '橙色：延迟较高',
+      unavailable: '红色：延迟超时或者暂不可用'
+    },
     maintenancePaused: '维护中 · 已暂停时间线采集',
     extraModelsCount: '+ {n} 模型',
     pollEvery: '{n}s 轮询',

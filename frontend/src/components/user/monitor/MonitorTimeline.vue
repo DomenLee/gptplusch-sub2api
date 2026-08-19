@@ -70,7 +70,9 @@ const STATUS_HEIGHT: Record<string, number> = {
 }
 
 const STATUS_COLOR: Record<string, string> = {
-  operational: 'bg-emerald-500',
+  // `emerald` is aliased to the monochrome palette in tailwind.config.js;
+  // use the configured brand color so healthy records remain visibly green.
+  operational: 'bg-primary-500',
   degraded: 'bg-amber-500',
   failed: 'bg-red-500',
   error: 'bg-red-500',

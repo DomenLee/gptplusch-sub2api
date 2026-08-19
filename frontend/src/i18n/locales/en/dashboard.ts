@@ -481,6 +481,13 @@ export default {
     nextUpdateIn: 'NEXT UPDATE IN {n}s',
     past: 'PAST',
     now: 'NOW',
+    timelineLegendAria: 'Status record color legend',
+    timelineLegendTitle: 'Status records',
+    timelineLegend: {
+      operational: 'Green: normal latency',
+      degraded: 'Orange: high latency',
+      unavailable: 'Red: timed out or temporarily unavailable'
+    },
     maintenancePaused: 'Maintenance · timeline paused',
     extraModelsCount: '+ {n} models',
     pollEvery: '{n}s polling',
