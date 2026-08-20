@@ -59,7 +59,7 @@
     >
       <span class="font-medium text-gray-600 dark:text-gray-300">{{ t('monitorCommon.timelineLegendTitle') }}</span>
       <span class="inline-flex items-center gap-1.5">
-        <i class="h-2 w-2 rounded-full bg-primary-500" aria-hidden="true"></i>
+        <i class="h-2 w-2 rounded-full bg-primary-600" aria-hidden="true"></i>
         {{ t('monitorCommon.timelineLegend.operational') }}
       </span>
       <span class="inline-flex items-center gap-1.5">
