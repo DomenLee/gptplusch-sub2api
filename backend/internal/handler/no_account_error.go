@@ -37,10 +37,11 @@ type noAccountErrorClassification struct {
 // classifyNoAccountError decides between 404 model_not_found and 503
 // api_error for "no available accounts" failures.
 //
-// The classifier intentionally does not consume the original error: the
-// selection layer never tells us *why* the pool came up empty (rate-limited
-// vs. unsupported model are both wrapped as ErrNoAvailableAccounts). Instead
-// we re-check pool composition through DiagnoseModelAvailabilityForPlatform.
+// Explicit selection policy errors are classified directly. For generic
+// ErrNoAvailableAccounts failures, the selection layer does not tell us *why*
+// the pool came up empty (rate-limited vs. unsupported model are both wrapped
+// the same way), so we re-check pool composition through
+// DiagnoseModelAvailabilityForPlatform.
 // Its dedicated database query considers only persistent eligibility
 // (active status + schedulable setting) and model_mapping, bypassing scheduler
 // snapshots and transient filters. That guarantees a 404 is only returned
@@ -131,7 +132,11 @@ func classifyNoAccountErrorFromGin(
 	if c != nil && c.Request != nil {
 		ctx = c.Request.Context()
 	}
-	return classifyNoAccountError(ctx, diag, apiKey, routingModel, displayModel, platform, selectionErr...)
+	classification := classifyNoAccountError(ctx, diag, apiKey, routingModel, displayModel, platform, selectionErr...)
+	if classification.ModelNotFound || classification.ModelNotAllowed {
+		service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalModelConfiguration)
+	}
+	return classification
 }
 
 func classifyOpenAICompatibleNoAccountErrorFromGin(
