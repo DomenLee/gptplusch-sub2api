@@ -1118,6 +1118,13 @@ export default {
         fallbackHint: 'Non-Claude Code requests will use this group. Leave empty to reject directly.',
         noFallback: 'No Fallback (Reject)'
       },
+      autoRoute: {
+        title: 'OpenAI Auto-route Group',
+        hint: 'Uses the lowest effective user rate first, falls back when no account is schedulable, and switches back after recovery.',
+        targets: 'Target groups',
+        targetsHint: 'Select one or more. Runtime order is calculated from user rate, group order, then group ID.',
+        targetsRequired: 'Select at least one target group before enabling auto routing.'
+      },
       openaiMessages: {
         title: 'OpenAI Messages Dispatch',
         allowDispatch: 'Allow /v1/messages dispatch',

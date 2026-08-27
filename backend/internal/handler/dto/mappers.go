@@ -146,6 +146,8 @@ func GroupFromServiceAdmin(g *service.Group) *AdminGroup {
 	}
 	out := &AdminGroup{
 		Group:                       groupFromServiceBase(g),
+		AutoRouteEnabled:            g.AutoRouteEnabled,
+		AutoRouteGroupIDs:           append([]int64(nil), g.AutoRouteGroupIDs...),
 		ProfitControlEnabled:        g.ProfitControlEnabled,
 		ProfitMinMargin:             g.ProfitMinMargin,
 		ProfitSafetyBuffer:          g.ProfitSafetyBuffer,

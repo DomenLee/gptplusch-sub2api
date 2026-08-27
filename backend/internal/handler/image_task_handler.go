@@ -66,7 +66,9 @@ func (h *AsyncImageHandler) Submit(c *gin.Context) {
 		imageTaskJSONError(c, http.StatusNotFound, "not_found_error", "Images API is not supported for this platform")
 		return
 	}
-	if !service.GroupAllowsImageGeneration(apiKey.Group) {
+	// 自动路由入口要等异步任务真正执行、取得用户并发槽位后，
+	// 再由 Images handler 按模型、端点能力和实时容量选择目标分组。
+	if !apiKey.IsAutoRouteRequest() && !service.GroupAllowsImageGeneration(apiKey.Group) {
 		imageTaskJSONError(c, http.StatusForbidden, "permission_error", service.ImageGenerationPermissionMessage())
 		return
 	}

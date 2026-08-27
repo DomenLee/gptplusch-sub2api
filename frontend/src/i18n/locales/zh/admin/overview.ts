@@ -1116,6 +1116,13 @@ export default {
         fallbackHint: '非 Claude Code 请求将使用此分组，留空则直接拒绝',
         noFallback: '不降级（直接拒绝）'
       },
+      autoRoute: {
+        title: 'OpenAI 自动路由分组',
+        hint: '按用户实际倍率优先使用低倍率目标；目标无可调度账号时自动使用下一档，恢复后自动切回。',
+        targets: '候选目标分组',
+        targetsHint: '可多选。实际顺序按用户倍率、分组排序、分组 ID 自动计算。',
+        targetsRequired: '启用自动路由前请至少选择一个候选目标分组。'
+      },
       openaiMessages: {
         title: 'OpenAI Messages 调度配置',
         allowDispatch: '允许 /v1/messages 调度',

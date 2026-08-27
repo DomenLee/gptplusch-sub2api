@@ -94,27 +94,18 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		zap.String("img_quality", parsed.Quality),
 		zap.String("img_size", parsed.Size),
 	)
-
-	if !service.GroupAllowsImageGeneration(apiKey.Group) {
+	if !apiKey.IsAutoRouteRequest() && !service.GroupAllowsImageGeneration(apiKey.Group) {
 		h.errorResponse(c, http.StatusForbidden, "permission_error", service.ImageGenerationPermissionMessage())
 		return
 	}
+
 	if decision := h.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIImages, requestModel, parsed.ModerationBody()); decision != nil && !decision.AllowNextStage {
 		h.openAISecurityAuditError(c, decision)
 		return
 	}
-	imageReleaseFunc, acquired := h.acquireImageGenerationSlot(c, streamStarted)
-	if !acquired {
-		return
-	}
-	if imageReleaseFunc != nil {
-		defer imageReleaseFunc()
-	}
 
 	setOpsRequestContext(c, clientRequestModel, parsed.Stream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(parsed.Stream, false)))
-
-	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, routingModel)
 
 	if h.errorPassthroughService != nil {
 		service.BindErrorPassthroughService(c, h.errorPassthroughService)
@@ -132,6 +123,30 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 	if userReleaseFunc != nil {
 		defer userReleaseFunc()
 	}
+	routeReservation, err := h.finalizeAutoRouteForRequirements(c, apiKey, service.AutoRouteRequirements{
+		RequestedModel:  routingModel,
+		ImageCapability: parsed.RequiredCapability,
+	})
+	if err != nil {
+		reqLog.Warn("openai.images.auto_route_failed", zap.Error(err))
+		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No auto-route group supports the requested model with available capacity", streamStarted)
+		return
+	}
+	if routeReservation != nil {
+		defer routeReservation.Release()
+	}
+	if !service.GroupAllowsImageGeneration(apiKey.Group) {
+		h.errorResponse(c, http.StatusForbidden, "permission_error", service.ImageGenerationPermissionMessage())
+		return
+	}
+	imageReleaseFunc, acquired := h.acquireImageGenerationSlot(c, streamStarted)
+	if !acquired {
+		return
+	}
+	if imageReleaseFunc != nil {
+		defer imageReleaseFunc()
+	}
+	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, routingModel)
 
 	if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey)); err != nil {
 		reqLog.Info("openai.images.billing_eligibility_check_failed", zap.Error(err))

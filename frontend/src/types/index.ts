@@ -607,6 +607,9 @@ export interface Group {
 }
 
 export interface AdminGroup extends Group {
+	/** OpenAI 自动路由入口配置（仅管理员可见）。 */
+	auto_route_enabled?: boolean
+	auto_route_group_ids?: number[]
   model_pricing: import('@/api/admin/channels').ChannelModelPricing[]
   // 分组利润控制（openai/anthropic/gemini/grok/antigravity 分组可启用；margin/buffer 为小数存储）。
   // 仅管理员可见：与 rate_multiplier 相乘即可反推上游成本上限，不得下放到 Group。
@@ -765,6 +768,8 @@ export interface CreateGroupRequest {
   description?: string | null
   platform?: GroupPlatform
   rate_multiplier?: number
+  auto_route_enabled?: boolean
+  auto_route_group_ids?: number[]
   is_exclusive?: boolean
   subscription_type?: SubscriptionType
   daily_limit_usd?: number | null
@@ -826,6 +831,8 @@ export interface UpdateGroupRequest {
   description?: string | null
   platform?: GroupPlatform
   rate_multiplier?: number
+  auto_route_enabled?: boolean
+  auto_route_group_ids?: number[]
   is_exclusive?: boolean
   status?: 'active' | 'inactive'
   subscription_type?: SubscriptionType

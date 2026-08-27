@@ -84,8 +84,6 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 		return
 	}
 
-	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
-
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
 
@@ -96,6 +94,16 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 	if userReleaseFunc != nil {
 		defer userReleaseFunc()
 	}
+	routeReservation, err := h.finalizeAutoRoute(c, apiKey, reqModel, service.OpenAIEndpointCapabilityEmbeddings, false)
+	if err != nil {
+		reqLog.Warn("openai_embeddings.auto_route_failed", zap.Error(err))
+		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "No auto-route group supports the requested model with available capacity")
+		return
+	}
+	if routeReservation != nil {
+		defer routeReservation.Release()
+	}
+	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
 
 	if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey)); err != nil {
 		reqLog.Info("openai_embeddings.billing_check_failed", zap.Error(err))

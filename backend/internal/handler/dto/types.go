@@ -161,6 +161,8 @@ type Group struct {
 // 注意：普通用户接口不得返回 model_routing/account_count/account_groups 等内部信息。
 type AdminGroup struct {
 	Group
+	AutoRouteEnabled  bool    `json:"auto_route_enabled"`
+	AutoRouteGroupIDs []int64 `json:"auto_route_group_ids"`
 
 	// 分组利润控制（五个 token 平台分组可启用；margin/buffer 为小数存储）。
 	// 仅管理员可见：这三个字段与同响应中的 rate_multiplier 相乘即可反推出

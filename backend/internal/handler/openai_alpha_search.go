@@ -87,8 +87,6 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		return
 	}
 
-	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, requestedModel)
-	forwardBody := openAIModelMappedBody(body, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
 
@@ -99,6 +97,17 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 	if userRelease != nil {
 		defer userRelease()
 	}
+	routeReservation, err := h.finalizeAutoRoute(c, apiKey, requestedModel, service.OpenAIEndpointCapabilityAlphaSearch, false)
+	if err != nil {
+		reqLog.Warn("openai_alpha_search.auto_route_failed", zap.Error(err))
+		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "No auto-route group supports the requested model with available capacity")
+		return
+	}
+	if routeReservation != nil {
+		defer routeReservation.Release()
+	}
+	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, requestedModel)
+	forwardBody := openAIModelMappedBody(body, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
 
 	if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey)); err != nil {
 		status, code, message, retryAfter := billingErrorDetails(err)

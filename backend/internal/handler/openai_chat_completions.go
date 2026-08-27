@@ -80,9 +80,6 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by this OpenAI-compatible endpoint for composite groups")
 		return
 	}
-	if cappedBody, changed := applyOpenAIReasoningEffortPolicyForRequest(c, apiKey, body); changed {
-		body = cappedBody
-	}
 	reqStream, ok := parseOpenAICompatibleStream(body)
 	if !ok {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", invalidStreamFieldTypeMessage)
@@ -106,15 +103,11 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		return
 	}
 
-	// 解析渠道级模型映射
-	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
-
 	if h.errorPassthroughService != nil {
 		service.BindErrorPassthroughService(c, h.errorPassthroughService)
 	}
 
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
-	requestPlatform := openAICompatibleRequestPlatform(c.Request.Context(), apiKey)
 
 	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
 	routingStart := time.Now()
@@ -126,6 +119,20 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	if userReleaseFunc != nil {
 		defer userReleaseFunc()
 	}
+	routeReservation, err := h.finalizeAutoRoute(c, apiKey, reqModel, service.OpenAIEndpointCapabilityChatCompletions, false)
+	if err != nil {
+		reqLog.Warn("openai_chat_completions.auto_route_failed", zap.Error(err))
+		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "api_error", "No auto-route group supports the requested model with available capacity", streamStarted)
+		return
+	}
+	if routeReservation != nil {
+		defer routeReservation.Release()
+	}
+	if cappedBody, changed := applyOpenAIReasoningEffortPolicyForRequest(c, apiKey, body); changed {
+		body = cappedBody
+	}
+	requestPlatform := openAICompatibleRequestPlatform(c.Request.Context(), apiKey)
+	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
 
 	if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey)); err != nil {
 		reqLog.Info("openai_chat_completions.billing_eligibility_check_failed", zap.Error(err))

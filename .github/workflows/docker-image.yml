@@ -20,7 +20,14 @@ env:
   IMAGE_NAME: ghcr.io/domenlee/sub2api
 
 jobs:
+  ci:
+    name: Required CI
+    uses: ./.github/workflows/backend-ci.yml
+    permissions:
+      contents: read
+
   build:
+    needs: ci
     permissions:
       contents: read
       packages: write

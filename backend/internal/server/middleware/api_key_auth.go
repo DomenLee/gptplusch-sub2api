@@ -163,9 +163,22 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 		if abortIfAPIKeyGroupNotAllowed(c, apiKey) {
 			return
 		}
+		billingInfoRequest := c.Request.URL.Path == "/v1/sub2api/billing"
+		// 鉴权阶段只按倍率初选，不占用上游容量。用户在 handler 中真正取得
+		// 并发槽位后，再携带请求模型与端点能力完成容量终选。
+		routedAPIKey, routeErr := apiKeyService.ResolveAutoRouteGroup(c.Request.Context(), apiKey)
+		if routeErr != nil {
+			if errors.Is(routeErr, service.ErrNoAvailableAutoRouteGroup) {
+				AbortWithError(c, http.StatusServiceUnavailable, "AUTO_ROUTE_GROUP_UNAVAILABLE", "自动路由分组当前没有可用目标，请稍后重试")
+				return
+			}
+			AbortWithError(c, http.StatusInternalServerError, "AUTO_ROUTE_RESOLVE_FAILED", "Failed to resolve auto route group")
+			return
+		}
+		apiKey = routedAPIKey
+		SetOpsFallbackAPIKey(c, apiKey)
 		ctx := context.WithValue(c.Request.Context(), ctxkey.UserID, apiKey.User.ID)
 		c.Request = c.Request.WithContext(ctx)
-		billingInfoRequest := c.Request.URL.Path == "/v1/sub2api/billing"
 		// Async image task polling only reads data that already belongs to the
 		// authenticated key and must remain available after the completed
 		// generation consumes the key's remaining balance.
@@ -378,6 +391,17 @@ func GetSubscriptionFromContext(c *gin.Context) (*service.UserSubscription, bool
 	}
 	subscription, ok := value.(*service.UserSubscription)
 	return subscription, ok
+}
+
+// RefreshAPIKeyRouteContext 在两阶段自动路由终选后同步 Gin 与 request context。
+// APIKey 指针本身由 handler 原地更新，这里只刷新依赖分组上下文的后续服务。
+func RefreshAPIKeyRouteContext(c *gin.Context, apiKey *service.APIKey) {
+	if c == nil || apiKey == nil {
+		return
+	}
+	c.Set(string(ContextKeyAPIKey), apiKey)
+	SetOpsFallbackAPIKey(c, apiKey)
+	setGroupContext(c, apiKey.Group)
 }
 
 func setGroupContext(c *gin.Context, group *service.Group) {
