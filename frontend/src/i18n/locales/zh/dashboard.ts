@@ -691,6 +691,7 @@ export default {
     redeemCodeHint: '兑换码区分大小写',
     redeeming: '兑换中...',
     redeemButton: '兑换',
+    buyCode: '购买兑换码',
     redeemSuccess: '兑换成功！',
     redeemFailed: '兑换失败',
     added: '已添加',

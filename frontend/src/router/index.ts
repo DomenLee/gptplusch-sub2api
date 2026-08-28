@@ -253,6 +253,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/store',
+    name: 'Store',
+    component: () => import('@/views/user/StoreView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Store',
+      titleKey: 'store.title',
+      descriptionKey: 'store.description'
+    }
+  },
+  {
     path: '/checkin',
     name: 'CheckIn',
     component: () => import('@/views/user/CheckInView.vue'),

@@ -71,6 +71,13 @@ export default {
       'The administrator enabled the entry but has not configured a recharge/subscription URL. Please contact admin.'
   },
 
+  store: {
+    title: 'Store',
+    description: 'Purchase Codex token credit products',
+    loading: 'Loading store...',
+    openInNewTab: 'Open in new tab'
+  },
+
   // Custom Page (iframe embed)
   customPage: {
     title: 'Custom Page',

@@ -32,15 +32,10 @@
                 @change="loadCharts"
               />
             </div>
-            <a
-              :href="purchaseUrl"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="dashboard-dark-pill"
-            >
+            <router-link to="/store" class="dashboard-dark-pill">
               <span>{{ t('dashboard.buyNow') }}</span>
-              <Icon name="externalLink" size="sm" />
-            </a>
+              <Icon name="arrowRight" size="sm" />
+            </router-link>
             <button
               v-if="checkInStatus?.config.enabled"
               type="button"
@@ -355,8 +350,6 @@ const checkInStatus = ref<CheckInStatus | null>(null)
 const checkingIn = ref(false)
 const checkInReward = ref(0)
 const showCheckInReward = ref(false)
-const purchaseUrl = 'https://www.gptplusch.store/products?category=other'
-
 const formatLD = (d: Date) => d.toISOString().split('T')[0]
 const startDate = ref(formatLD(new Date(Date.now() - 6 * 86400000)))
 const endDate = ref(formatLD(new Date()))

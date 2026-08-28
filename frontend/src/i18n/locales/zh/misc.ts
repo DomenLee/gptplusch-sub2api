@@ -69,6 +69,13 @@ export default {
     notConfiguredDesc: '管理员已开启入口，但尚未配置充值/订阅链接，请联系管理员。'
   },
 
+  store: {
+    title: '商店',
+    description: '购买 Codex token 额度产品',
+    loading: '商城加载中...',
+    openInNewTab: '新窗口打开'
+  },
+
   // Custom Page (iframe embed)
   customPage: {
     title: '自定义页面',

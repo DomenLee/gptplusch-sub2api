@@ -686,6 +686,7 @@ export default {
     redeemCodeHint: 'Redeem codes are case-sensitive',
     redeeming: 'Redeeming...',
     redeemButton: 'Redeem Code',
+    buyCode: 'Buy Redeem Code',
     redeemSuccess: 'Code Redeemed Successfully!',
     redeemFailed: 'Redemption Failed',
     added: 'Added',
