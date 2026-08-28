@@ -142,7 +142,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	defer h.maybeLogCompatibilityFallbackMetrics(reqLog)
 
 	// 读取请求体
-	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, h.cfg)
+	body, err := readLenientJSONRequestBodyWithDiagnostics(c, h.cfg, reqLog)
 	if err != nil {
 		if maxErr, ok := extractMaxBytesError(err); ok {
 			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
@@ -1989,7 +1989,7 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	defer h.maybeLogCompatibilityFallbackMetrics(reqLog)
 
 	// 读取请求体
-	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, h.cfg)
+	body, err := readLenientJSONRequestBodyWithDiagnostics(c, h.cfg, reqLog)
 	if err != nil {
 		if maxErr, ok := extractMaxBytesError(err); ok {
 			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))

@@ -7,6 +7,8 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 func extractMaxBytesError(err error) (*http.MaxBytesError, bool) {
@@ -31,6 +33,22 @@ func buildBodyTooLargeMessage(limit int64) string {
 
 func readLenientJSONRequestBodyWithPrealloc(req *http.Request, cfg *config.Config) ([]byte, error) {
 	return pkghttputil.ReadLenientJSONRequestBodyWithPrealloc(req, gatewayMaxBodySize(cfg))
+}
+
+func readRequestBodyWithDiagnostics(c *gin.Context, reqLog *zap.Logger) ([]byte, error) {
+	body, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
+	if err != nil {
+		recordRequestBodyReadFailure(c, reqLog, err)
+	}
+	return body, err
+}
+
+func readLenientJSONRequestBodyWithDiagnostics(c *gin.Context, cfg *config.Config, reqLog *zap.Logger) ([]byte, error) {
+	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, cfg)
+	if err != nil {
+		recordRequestBodyReadFailure(c, reqLog, err)
+	}
+	return body, err
 }
 
 func gatewayMaxBodySize(cfg *config.Config) int64 {
