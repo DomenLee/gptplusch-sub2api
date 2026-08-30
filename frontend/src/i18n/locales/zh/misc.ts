@@ -73,7 +73,9 @@ export default {
     title: '商店',
     description: '购买 Codex token 额度产品',
     loading: '商城加载中...',
-    openInNewTab: '新窗口打开'
+    openInNewTab: '新窗口打开',
+    serviceHoursTitle: '客服在线时间 9:00–23:00',
+    serviceHoursDescription: '其他时间可能暂无人工审核订单，无法保证立即发货。'
   },
 
   // Custom Page (iframe embed)

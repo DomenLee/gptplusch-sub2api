@@ -75,7 +75,9 @@ export default {
     title: 'Store',
     description: 'Purchase Codex token credit products',
     loading: 'Loading store...',
-    openInNewTab: 'Open in new tab'
+    openInNewTab: 'Open in new tab',
+    serviceHoursTitle: 'Support hours: 9:00–23:00',
+    serviceHoursDescription: 'Orders placed outside these hours may not be reviewed or delivered immediately.'
   },
 
   // Custom Page (iframe embed)
