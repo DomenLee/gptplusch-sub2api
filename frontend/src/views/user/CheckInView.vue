@@ -6,6 +6,19 @@
       </div>
 
       <template v-else-if="status">
+        <div
+          role="note"
+          class="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100"
+        >
+          <Icon name="sparkles" size="sm" class="mt-0.5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
+          <div>
+            <p class="text-sm font-semibold">{{ t('checkIn.redeemLuckTitle') }}</p>
+            <p class="mt-1 text-xs leading-5 text-amber-800 dark:text-amber-200">
+              {{ t('checkIn.redeemLuckDescription') }}
+            </p>
+          </div>
+        </div>
+
         <section class="card overflow-hidden">
           <div class="grid min-h-[330px] lg:grid-cols-[minmax(0,1.25fr)_minmax(280px,0.75fr)]">
             <div class="flex flex-col justify-between border-b border-gray-100 p-6 dark:border-dark-700 sm:p-8 lg:border-b-0 lg:border-r">
