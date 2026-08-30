@@ -16,8 +16,8 @@
       >
         <BrandWordmark
           :name="sidebarCollapsed ? compactSiteName : siteName"
-          class="sidebar-logo flex h-9 items-center overflow-hidden font-bold text-gray-900 shadow-none dark:text-white"
-          :class="sidebarCollapsed ? 'w-9 justify-center text-xl' : 'w-32 justify-start text-[22px]'"
+          class="sidebar-logo flex h-9 items-center font-bold text-gray-900 shadow-none dark:text-white"
+          :class="sidebarCollapsed ? 'sidebar-logo-collapsed justify-center text-xl' : 'justify-start text-[22px]'"
         />
       </router-link>
       <div class="sidebar-brand" :class="{ 'sidebar-brand-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">
@@ -956,8 +956,14 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .sidebar-logo {
-  flex: 0 1 auto;
-  min-width: 0;
+  width: auto;
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+.sidebar-logo-collapsed {
+  width: 2.25rem;
+  overflow: hidden;
 }
 
 .sidebar-header-collapsed {
