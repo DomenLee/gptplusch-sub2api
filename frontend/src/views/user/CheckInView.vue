@@ -13,9 +13,6 @@
           <Icon name="sparkles" size="sm" class="mt-0.5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
           <div>
             <p class="text-sm font-semibold">{{ t('checkIn.redeemLuckTitle') }}</p>
-            <p class="mt-1 text-xs leading-5 text-amber-800 dark:text-amber-200">
-              {{ t('checkIn.redeemLuckDescription') }}
-            </p>
           </div>
         </div>
 
