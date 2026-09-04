@@ -40,6 +40,15 @@
           >
             <Icon name="book" size="md" />
           </a>
+          <router-link
+            v-if="showModelPlazaEntry"
+            to="/model-plaza"
+            class="flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
+            :title="t('nav.modelPlaza')"
+          >
+            <Icon name="grid" size="md" />
+            <span class="hidden sm:inline">{{ t('nav.modelPlaza') }}</span>
+          </router-link>
           <button
             class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 dark:text-dark-400 dark:hover:bg-dark-800"
             :title="isDark ? t('home.switchToLight') : t('home.switchToDark')"
@@ -106,6 +115,30 @@
         </router-link>
 
         <div class="absolute right-0 top-0 flex items-center gap-2">
+          <!-- Doc Link -->
+          <a
+            v-if="docUrl"
+            :href="docUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
+            :title="t('home.viewDocs')"
+          >
+            <Icon name="book" size="md" />
+          </a>
+
+          <!-- Model Plaza Link -->
+          <router-link
+            v-if="showModelPlazaEntry"
+            to="/model-plaza"
+            class="inline-flex items-center gap-1.5 rounded-lg p-2 text-sm text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
+            :title="t('nav.modelPlaza')"
+          >
+            <Icon name="grid" size="md" />
+            <span class="hidden sm:inline">{{ t('nav.modelPlaza') }}</span>
+          </router-link>
+
+          <!-- Login / Dashboard Button -->
           <router-link
             v-if="isAuthenticated"
             :to="dashboardPath"
@@ -184,6 +217,7 @@ import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { resolveSiteName } from '@/constants/site'
 import { sanitizeUrl } from '@/utils/url'
+import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
 
 const { t, locale } = useI18n()
 
@@ -201,6 +235,7 @@ const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle
 const homeContent = computed(() => appStore.cachedPublicSettings?.home_content || '')
 const hasHomeContent = computed(() => homeContent.value.trim().length > 0)
 const compactHomeEnabled = computed(() => appStore.cachedPublicSettings?.compact_home_enabled === true)
+const modelPlazaEnabled = computed(() => isFeatureFlagEnabled(FeatureFlags.modelPlaza))
 
 // Check if homeContent is a URL (for iframe display)
 const isHomeContentUrl = computed(() => {
@@ -213,6 +248,12 @@ const isDark = ref(document.documentElement.classList.contains('dark'))
 
 // Auth state
 const isAuthenticated = computed(() => authStore.isAuthenticated)
+const modelPlazaRequiresAuth = computed(
+  () => appStore.cachedPublicSettings?.model_plaza_require_auth === true,
+)
+const showModelPlazaEntry = computed(
+  () => modelPlazaEnabled.value && (isAuthenticated.value || !modelPlazaRequiresAuth.value),
+)
 const isAdmin = computed(() => authStore.isAdmin)
 const dashboardPath = computed(() => isAdmin.value ? '/admin/dashboard' : '/dashboard')
 const currentYear = computed(() => new Date().getFullYear())
