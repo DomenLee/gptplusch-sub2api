@@ -12,6 +12,7 @@ var (
 	ErrGroupNotFound             = infraerrors.NotFound("GROUP_NOT_FOUND", "group not found")
 	ErrGroupExists               = infraerrors.Conflict("GROUP_EXISTS", "group name already exists")
 	ErrNoAvailableAutoRouteGroup = infraerrors.ServiceUnavailable("AUTO_ROUTE_GROUP_UNAVAILABLE", "no auto route target group is currently available")
+	ErrGroupNotEmpty             = infraerrors.Conflict("GROUP_NOT_EMPTY", "group contains accounts")
 )
 
 type GroupRepository interface {
@@ -78,6 +79,12 @@ type GroupDuplicateRepository interface {
 type AdminGroupRepository interface {
 	GroupRepository
 	GroupDuplicateRepository
+	EmptyGroupDeleteRepository
+}
+
+// EmptyGroupDeleteRepository provides the guarded cascade used by simple mode.
+type EmptyGroupDeleteRepository interface {
+	DeleteCascadeIfEmpty(ctx context.Context, id int64) ([]int64, error)
 }
 
 // GroupSortOrderUpdate 分组排序更新
