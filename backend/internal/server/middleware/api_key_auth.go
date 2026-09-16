@@ -164,6 +164,17 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			return
 		}
 		billingInfoRequest := c.Request.URL.Path == "/v1/sub2api/billing"
+		// Async image task polling only reads data that already belongs to the
+		// authenticated key and must remain available after the completed
+		// generation consumes the key's remaining balance.
+		skipBilling := c.Request.URL.Path == "/v1/usage" || billingInfoRequest || isAsyncImageTaskRead(c.Request.Method, c.Request.URL.Path)
+		// 已知 Key 额度耗尽直接拒绝，避免重复请求触发路由和订阅读取。
+		if cfg.RunMode != config.RunModeSimple && !skipBilling &&
+			(apiKey.Status == service.StatusAPIKeyQuotaExhausted ||
+				(apiKey.Status != service.StatusAPIKeyExpired && !apiKey.IsExpired() && apiKey.IsQuotaExhausted())) {
+			abortWithAPIKeyQuotaError(c)
+			return
+		}
 		// 鉴权阶段只按倍率初选，不占用上游容量。用户在 handler 中真正取得
 		// 并发槽位后，再携带请求模型与端点能力完成容量终选。
 		routedAPIKey, routeErr := apiKeyService.ResolveAutoRouteGroup(c.Request.Context(), apiKey)
@@ -179,11 +190,6 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 		SetOpsFallbackAPIKey(c, apiKey)
 		ctx := context.WithValue(c.Request.Context(), ctxkey.UserID, apiKey.User.ID)
 		c.Request = c.Request.WithContext(ctx)
-		// Async image task polling only reads data that already belongs to the
-		// authenticated key and must remain available after the completed
-		// generation consumes the key's remaining balance.
-		skipBilling := c.Request.URL.Path == "/v1/usage" || billingInfoRequest || isAsyncImageTaskRead(c.Request.Method, c.Request.URL.Path)
-
 		// ── 4. SimpleMode → early return ─────────────────────────────
 
 		if cfg.RunMode == config.RunModeSimple {
@@ -274,7 +280,8 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			} else {
 				// 非订阅模式 或 订阅模式但 subscriptionService 未注入：回退到余额检查
 				if apiKeyBalanceBelowAuthThreshold(apiKey.User.Balance, cfg) {
-					AbortWithError(c, 403, "INSUFFICIENT_BALANCE", service.InsufficientBalanceClientMessage)
+					markBillingExhausted(c, IngressRejectInsufficientBalance)
+					AbortWithError(c, 403, "INSUFFICIENT_BALANCE", billingBalanceExhaustedMessage())
 					return
 				}
 			}
@@ -319,7 +326,8 @@ func hasAPIKeyCredentialInput(c *gin.Context) bool {
 }
 
 func abortWithAPIKeyQuotaError(c *gin.Context) {
-	const message = "API key 额度已用完"
+	markBillingExhausted(c, IngressRejectAPIKeyQuotaExhausted)
+	const message = apiKeyQuotaExhaustedMessage
 	if isOpenAICompatibleAPIKeyRequest(c) {
 		abortWithOpenAIQuotaError(c, http.StatusTooManyRequests, message)
 		return
