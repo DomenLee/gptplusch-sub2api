@@ -13,8 +13,8 @@ const (
 	monitorRequestTimeout = 45 * time.Second
 	// monitorPingTimeout HEAD 请求 endpoint origin 的超时。
 	monitorPingTimeout = 8 * time.Second
-	// monitorDegradedThreshold 主请求成功但耗时超过该阈值视为 degraded。
-	monitorDegradedThreshold = 10 * time.Second
+	// monitorDegradedThreshold 主请求成功但耗时达到该阈值视为 degraded。
+	monitorDegradedThreshold = 30 * time.Second
 	// monitorTransientRetryCount 临时网络/上游错误的单次重试次数。
 	monitorTransientRetryCount = 1
 	// monitorTransientRetryDelay 临时错误重试前的最短等待时间。
