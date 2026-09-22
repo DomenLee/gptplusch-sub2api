@@ -49,18 +49,18 @@ type CheckInRecord struct {
 }
 
 type CheckInStatus struct {
-	Config         CheckInConfig   `json:"config"`
-	CheckedToday   bool            `json:"checked_today"`
-	TodayReward    float64         `json:"today_reward"`
-	CycleReward    float64         `json:"cycle_reward"`
-	TotalReward    float64         `json:"total_reward"`
-	NextRewardMode string          `json:"next_reward_mode"`
-	NextRewardMin  int             `json:"next_reward_min"`
-	NextRewardMax  int             `json:"next_reward_max"`
-	RecentCheckIns []CheckInRecord `json:"recent_checkins"`
-	ServerDate     string          `json:"server_date"`
-	ServerTimezone string          `json:"server_timezone"`
-	CampaignEligible bool          `json:"campaign_eligible"`
+	Config           CheckInConfig   `json:"config"`
+	CheckedToday     bool            `json:"checked_today"`
+	TodayReward      float64         `json:"today_reward"`
+	CycleReward      float64         `json:"cycle_reward"`
+	TotalReward      float64         `json:"total_reward"`
+	NextRewardMode   string          `json:"next_reward_mode"`
+	NextRewardMin    int             `json:"next_reward_min"`
+	NextRewardMax    int             `json:"next_reward_max"`
+	RecentCheckIns   []CheckInRecord `json:"recent_checkins"`
+	ServerDate       string          `json:"server_date"`
+	ServerTimezone   string          `json:"server_timezone"`
+	CampaignEligible bool            `json:"campaign_eligible"`
 }
 
 type CheckInResult struct {
