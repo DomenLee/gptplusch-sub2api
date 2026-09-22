@@ -14,6 +14,7 @@ import (
 const (
 	CheckInModeStandard = "standard"
 	CheckInModeReduced  = "reduced"
+	CheckInModeCampaign = "campaign"
 )
 
 var ErrCheckInDisabled = infraerrors.Forbidden("CHECKIN_DISABLED", "daily check-in is disabled")
@@ -26,6 +27,9 @@ type CheckInConfig struct {
 	ReducedMin       int       `json:"reduced_min"`
 	ReducedMax       int       `json:"reduced_max"`
 	UpdatedAt        time.Time `json:"updated_at"`
+	CampaignStart    time.Time `json:"campaign_start"`
+	CampaignEnd      time.Time `json:"campaign_end"`
+	CampaignReward   int       `json:"campaign_reward"`
 }
 
 func (c CheckInConfig) RewardRange(cycleReward float64) (mode string, minReward, maxReward int) {
@@ -56,6 +60,7 @@ type CheckInStatus struct {
 	RecentCheckIns []CheckInRecord `json:"recent_checkins"`
 	ServerDate     string          `json:"server_date"`
 	ServerTimezone string          `json:"server_timezone"`
+	CampaignEligible bool          `json:"campaign_eligible"`
 }
 
 type CheckInResult struct {

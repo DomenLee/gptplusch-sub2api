@@ -8,13 +8,16 @@ export interface CheckInConfig {
   reduced_min: number
   reduced_max: number
   updated_at: string
+  campaign_start: string
+  campaign_end: string
+  campaign_reward: number
 }
 
 export interface CheckInRecord {
   id: number
   date: string
   reward: number
-  mode: 'standard' | 'reduced'
+  mode: 'standard' | 'reduced' | 'campaign'
   cycle_reward_after: number
   created_at: string
 }
@@ -31,6 +34,7 @@ export interface CheckInStatus {
   recent_checkins: CheckInRecord[]
   server_date: string
   server_timezone: string
+  campaign_eligible: boolean
 }
 
 export interface CheckInResult {

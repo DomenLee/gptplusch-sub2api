@@ -4,6 +4,7 @@ export default {
     disabled: '签到暂未开放',
     todayReceived: '今日已获得',
     maxReward: '最高可获得',
+    campaignRewardHint: '兑换过兑换码，活动期间每日固定获得',
     creditUnit: '额度',
     action: '立即签到',
     checked: '今日已签到',

@@ -4,6 +4,7 @@ export default {
     disabled: 'Check-in is currently unavailable',
     todayReceived: 'Received today',
     maxReward: 'Up to',
+    campaignRewardHint: 'Redeemed users receive a fixed daily reward during the campaign',
     creditUnit: 'credits',
     action: 'Check in',
     checked: 'Checked in today',

@@ -42,11 +42,13 @@
 
               <div v-else class="py-8">
                 <p class="text-sm text-gray-500 dark:text-gray-400">
-                  {{ status.checked_today ? t('checkIn.todayReceived') : t('checkIn.maxReward') }}
+                  {{ status.checked_today ? t('checkIn.todayReceived') : status.campaign_eligible ? t('checkIn.campaignRewardHint') : t('checkIn.maxReward') }}
                 </p>
                 <p class="mt-2 text-5xl font-semibold tracking-normal text-gray-950 dark:text-white">
                   <template v-if="status.checked_today">+{{ formatAmount(status.today_reward) }}</template>
-                  <template v-else>10$</template>
+                  <template v-else>
+                    {{ status.campaign_eligible ? formatAmount(status.config.campaign_reward) : status.next_reward_min === status.next_reward_max ? formatAmount(status.next_reward_max) : `${status.next_reward_min}-${status.next_reward_max}` }}$
+                  </template>
                 </p>
                 <p v-if="status.checked_today" class="mt-2 text-sm font-medium text-emerald-600 dark:text-emerald-400">
                   {{ t('checkIn.creditUnit') }}

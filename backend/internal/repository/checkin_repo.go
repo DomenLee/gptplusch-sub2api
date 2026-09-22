@@ -28,8 +28,11 @@ func (r *checkInRepository) GetUserStatus(ctx context.Context, userID int64, day
 	err := r.db.QueryRowContext(ctx, `
 		SELECT cfg.enabled, cfg.standard_min, cfg.standard_max, cfg.reduced_threshold,
 		       cfg.reduced_min, cfg.reduced_max, cfg.updated_at,
+		       cfg.campaign_start, cfg.campaign_end, cfg.campaign_reward,
 		       COALESCE(state.cycle_reward, 0), COALESCE(state.total_reward, 0),
-		       today.reward
+		       today.reward,
+		       ($2::date BETWEEN cfg.campaign_start AND cfg.campaign_end
+		        AND EXISTS (SELECT 1 FROM redeem_codes rc WHERE rc.used_by = $1 AND rc.used_at IS NOT NULL))
 		FROM checkin_settings AS cfg
 		LEFT JOIN user_checkin_states AS state ON state.user_id = $1
 		LEFT JOIN user_checkins AS today ON today.user_id = $1 AND today.checkin_date = $2::date
@@ -42,9 +45,13 @@ func (r *checkInRepository) GetUserStatus(ctx context.Context, userID int64, day
 		&status.Config.ReducedMin,
 		&status.Config.ReducedMax,
 		&status.Config.UpdatedAt,
+		&status.Config.CampaignStart,
+		&status.Config.CampaignEnd,
+		&status.Config.CampaignReward,
 		&status.CycleReward,
 		&status.TotalReward,
 		&todayReward,
+		&status.CampaignEligible,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("get check-in status: %w", err)
@@ -91,7 +98,8 @@ func (r *checkInRepository) CheckIn(ctx context.Context, userID int64, day time.
 	var cfg service.CheckInConfig
 	err = tx.QueryRowContext(ctx, `
 		SELECT enabled, standard_min, standard_max, reduced_threshold,
-		       reduced_min, reduced_max, updated_at
+		       reduced_min, reduced_max, updated_at,
+		       campaign_start, campaign_end, campaign_reward
 		FROM checkin_settings
 		WHERE id = 1
 	`).Scan(
@@ -102,6 +110,9 @@ func (r *checkInRepository) CheckIn(ctx context.Context, userID int64, day time.
 		&cfg.ReducedMin,
 		&cfg.ReducedMax,
 		&cfg.UpdatedAt,
+		&cfg.CampaignStart,
+		&cfg.CampaignEnd,
+		&cfg.CampaignReward,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load check-in config: %w", err)
@@ -146,7 +157,18 @@ func (r *checkInRepository) CheckIn(ctx context.Context, userID int64, day time.
 		return &service.CheckInResult{Record: *record, AlreadyChecked: true, NewBalance: balance}, nil
 	}
 
+	var campaignEligible bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT $2::date BETWEEN campaign_start AND campaign_end
+		       AND EXISTS (SELECT 1 FROM redeem_codes WHERE used_by = $1 AND used_at IS NOT NULL)
+		FROM checkin_settings WHERE id = 1
+	`, userID, dayValue).Scan(&campaignEligible); err != nil {
+		return nil, fmt.Errorf("check campaign check-in eligibility: %w", err)
+	}
 	mode, minReward, maxReward := cfg.RewardRange(cycleReward)
+	if campaignEligible {
+		mode, minReward, maxReward = service.CheckInModeCampaign, cfg.CampaignReward, cfg.CampaignReward
+	}
 	reward, err := picker(minReward, maxReward)
 	if err != nil {
 		return nil, err
@@ -218,7 +240,8 @@ func (r *checkInRepository) GetAdminStats(ctx context.Context, day time.Time, da
 	stats := &service.CheckInAdminStats{}
 	err := r.db.QueryRowContext(ctx, `
 		SELECT enabled, standard_min, standard_max, reduced_threshold,
-		       reduced_min, reduced_max, updated_at
+		       reduced_min, reduced_max, updated_at,
+		       campaign_start, campaign_end, campaign_reward
 		FROM checkin_settings
 		WHERE id = 1
 	`).Scan(
@@ -229,6 +252,9 @@ func (r *checkInRepository) GetAdminStats(ctx context.Context, day time.Time, da
 		&stats.Config.ReducedMin,
 		&stats.Config.ReducedMax,
 		&stats.Config.UpdatedAt,
+		&stats.Config.CampaignStart,
+		&stats.Config.CampaignEnd,
+		&stats.Config.CampaignReward,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load check-in config: %w", err)
@@ -291,7 +317,8 @@ func (r *checkInRepository) SetEnabled(ctx context.Context, enabled bool) (*serv
 		SET enabled = $1, updated_at = NOW()
 		WHERE id = 1
 		RETURNING enabled, standard_min, standard_max, reduced_threshold,
-		          reduced_min, reduced_max, updated_at
+			          reduced_min, reduced_max, updated_at,
+			          campaign_start, campaign_end, campaign_reward
 	`, enabled).Scan(
 		&cfg.Enabled,
 		&cfg.StandardMin,
@@ -300,6 +327,9 @@ func (r *checkInRepository) SetEnabled(ctx context.Context, enabled bool) (*serv
 		&cfg.ReducedMin,
 		&cfg.ReducedMax,
 		&cfg.UpdatedAt,
+		&cfg.CampaignStart,
+		&cfg.CampaignEnd,
+		&cfg.CampaignReward,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("update check-in config: %w", err)
