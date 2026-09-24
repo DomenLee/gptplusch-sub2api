@@ -38,7 +38,7 @@ func (r *proxyGroupRepository) List(ctx context.Context, page, pageSize int, sta
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	groups, err := scanProxyGroups(rows)
 	return groups, total, err
 }
@@ -48,7 +48,7 @@ func (r *proxyGroupRepository) ListAll(ctx context.Context) ([]service.ProxyGrou
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanProxyGroups(rows)
 }
 
@@ -57,7 +57,7 @@ func (r *proxyGroupRepository) GetByID(ctx context.Context, id int64) (*service.
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	groups, err := scanProxyGroups(rows)
 	if err != nil {
 		return nil, err
@@ -73,7 +73,7 @@ func (r *proxyGroupRepository) Create(ctx context.Context, group *service.ProxyG
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if err := validateProxyIDs(ctx, tx, proxyIDs); err != nil {
 		return err
 	}
@@ -92,7 +92,7 @@ func (r *proxyGroupRepository) Update(ctx context.Context, group *service.ProxyG
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if err := validateProxyIDs(ctx, tx, proxyIDs); err != nil {
 		return err
 	}
