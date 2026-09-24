@@ -42,12 +42,12 @@
 
               <div v-else class="py-8">
                 <p class="text-sm text-gray-500 dark:text-gray-400">
-                  {{ status.checked_today ? t('checkIn.todayReceived') : status.campaign_eligible ? t('checkIn.campaignRewardHint') : t('checkIn.maxReward') }}
+                  {{ status.checked_today ? t('checkIn.todayReceived') : t('checkIn.rewardHint') }}
                 </p>
-                <p class="mt-2 text-5xl font-semibold tracking-normal text-gray-950 dark:text-white">
+                <p class="mt-2 font-semibold tracking-normal text-gray-950 dark:text-white" :class="status.checked_today ? 'text-5xl' : 'text-3xl'">
                   <template v-if="status.checked_today">+{{ formatAmount(status.today_reward) }}</template>
                   <template v-else>
-                    {{ status.campaign_eligible ? formatAmount(status.config.campaign_reward) : status.next_reward_min === status.next_reward_max ? formatAmount(status.next_reward_max) : `${status.next_reward_min}-${status.next_reward_max}` }}$
+                    {{ t('checkIn.rewardReveal') }}
                   </template>
                 </p>
                 <p v-if="status.checked_today" class="mt-2 text-sm font-medium text-emerald-600 dark:text-emerald-400">
@@ -110,6 +110,7 @@
         </section>
       </template>
     </div>
+    <CheckInRewardDialog :show="showReward" :record="reward" @close="showReward = false" />
   </AppLayout>
 </template>
 
@@ -120,7 +121,8 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import Icon from '@/components/icons/Icon.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
-import checkInAPI, { type CheckInStatus } from '@/api/checkin'
+import CheckInRewardDialog from '@/components/user/CheckInRewardDialog.vue'
+import checkInAPI, { type CheckInRecord, type CheckInStatus } from '@/api/checkin'
 import { useAppStore } from '@/stores'
 import { useAuthStore } from '@/stores/auth'
 
@@ -130,6 +132,8 @@ const authStore = useAuthStore()
 const loading = ref(true)
 const submitting = ref(false)
 const status = ref<CheckInStatus | null>(null)
+const reward = ref<CheckInRecord | null>(null)
+const showReward = ref(false)
 
 function formatAmount(value: number): string {
   return Number(value || 0).toFixed(2)
@@ -140,16 +144,23 @@ async function loadStatus(): Promise<void> {
 }
 
 async function handleCheckIn(): Promise<void> {
-  if (!status.value || status.value.checked_today || !status.value.config.enabled) return
+  if (!status.value || status.value.checked_today || !status.value.config.enabled || submitting.value) return
   submitting.value = true
   try {
     const result = await checkInAPI.checkIn()
-    await Promise.all([loadStatus(), authStore.refreshUser()])
+    status.value.checked_today = true
+    status.value.today_reward = result.record.reward
     if (result.already_checked) {
       appStore.showWarning(t('checkIn.alreadyChecked'))
-      return
+    } else {
+      reward.value = result.record
+      showReward.value = true
     }
-    appStore.showSuccess(t('checkIn.success', { amount: formatAmount(result.record.reward) }))
+    try {
+      await Promise.all([loadStatus(), authStore.refreshUser()])
+    } catch {
+      appStore.showError(t('checkIn.refreshFailed', { date: result.record.date }))
+    }
   } catch (error: any) {
     appStore.showError(error?.message || t('checkIn.failed'))
   } finally {

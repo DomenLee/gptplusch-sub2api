@@ -290,29 +290,11 @@
       </template>
     </div>
 
-    <BaseDialog
+    <CheckInRewardDialog
       :show="showCheckInReward"
-      :title="t('dashboard.checkInSuccessTitle')"
-      width="narrow"
+      :record="checkInReward"
       @close="showCheckInReward = false"
-    >
-      <div class="py-4 text-center">
-        <span class="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-lime-200 text-gray-950 dark:bg-lime-300">
-          <Icon name="gift" size="lg" />
-        </span>
-        <p class="mt-5 text-4xl font-semibold tracking-normal text-gray-950 dark:text-white">
-          +${{ formatBalance(checkInReward) }}
-        </p>
-        <p class="mt-3 text-sm text-gray-500 dark:text-dark-400">
-          {{ t('dashboard.checkInSuccessDesc') }}
-        </p>
-      </div>
-      <template #footer>
-        <button type="button" class="btn btn-primary w-full sm:w-auto" @click="showCheckInReward = false">
-          {{ t('common.confirm') }}
-        </button>
-      </template>
-    </BaseDialog>
+    />
   </AppLayout>
 </template>
 
@@ -323,9 +305,9 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { useAppStore } from '@/stores'
 import { usageAPI, type UserDashboardStats as UserStatsType } from '@/api/usage'
-import checkInAPI, { type CheckInStatus } from '@/api/checkin'
+import checkInAPI, { type CheckInRecord, type CheckInStatus } from '@/api/checkin'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import BaseDialog from '@/components/common/BaseDialog.vue'
+import CheckInRewardDialog from '@/components/user/CheckInRewardDialog.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import Select from '@/components/common/Select.vue'
@@ -348,7 +330,7 @@ const modelStats = ref<ModelStat[]>([])
 const recentUsage = ref<UsageLog[]>([])
 const checkInStatus = ref<CheckInStatus | null>(null)
 const checkingIn = ref(false)
-const checkInReward = ref(0)
+const checkInReward = ref<CheckInRecord | null>(null)
 const showCheckInReward = ref(false)
 const formatLD = (d: Date) => d.toISOString().split('T')[0]
 const startDate = ref(formatLD(new Date(Date.now() - 6 * 86400000)))
@@ -463,14 +445,20 @@ const handleCheckIn = async () => {
   checkingIn.value = true
   try {
     const result = await checkInAPI.checkIn()
-    await Promise.all([loadCheckInStatus(), authStore.refreshUser()])
+    checkInStatus.value.checked_today = true
+    checkInStatus.value.today_reward = result.record.reward
     if (result.already_checked) {
       appStore.showWarning(t('dashboard.checkedIn'))
-      return
+    } else {
+      checkInReward.value = result.record
+      showCheckInReward.value = true
     }
-
-    checkInReward.value = result.record.reward
-    showCheckInReward.value = true
+    try {
+      const [status] = await Promise.all([checkInAPI.getStatus(), authStore.refreshUser()])
+      checkInStatus.value = status
+    } catch {
+      appStore.showError(t('checkIn.refreshFailed', { date: result.record.date }))
+    }
   } catch (error: any) {
     appStore.showError(error?.message || t('dashboard.checkInFailed'))
   } finally {

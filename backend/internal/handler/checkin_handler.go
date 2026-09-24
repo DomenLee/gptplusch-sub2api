@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -30,7 +31,7 @@ func (h *CheckInHandler) GetStatus(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, status)
+	response.Success(c, dto.ToCheckInStatus(status))
 }
 
 // CheckIn grants today's reward once.
@@ -47,5 +48,5 @@ func (h *CheckInHandler) CheckIn(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, result)
+	response.Success(c, dto.ToCheckInResult(result))
 }

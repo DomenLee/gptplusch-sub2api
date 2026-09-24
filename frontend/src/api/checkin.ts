@@ -17,24 +17,17 @@ export interface CheckInRecord {
   id: number
   date: string
   reward: number
-  mode: 'standard' | 'reduced' | 'campaign'
-  cycle_reward_after: number
   created_at: string
 }
 
 export interface CheckInStatus {
-  config: CheckInConfig
+  config: Pick<CheckInConfig, 'enabled'>
   checked_today: boolean
   today_reward: number
-  cycle_reward: number
   total_reward: number
-  next_reward_mode: 'standard' | 'reduced'
-  next_reward_min: number
-  next_reward_max: number
   recent_checkins: CheckInRecord[]
   server_date: string
   server_timezone: string
-  campaign_eligible: boolean
 }
 
 export interface CheckInResult {
