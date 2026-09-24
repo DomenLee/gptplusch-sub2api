@@ -1,28 +1,22 @@
 <template>
   <div class="space-y-3">
-    <select v-model="bindingMode" class="input" :disabled="disabled">
+    <select v-model="selectedBindingKey" class="input" :disabled="disabled">
       <option value="none">{{ t('admin.proxyGroups.binding.none') }}</option>
-      <option value="proxy">{{ t('admin.proxyGroups.binding.proxy') }}</option>
-      <option value="group" :disabled="proxyGroups.length === 0">
-        {{ t('admin.proxyGroups.binding.group') }}
-      </option>
+
+      <optgroup v-if="proxyGroups.length" :label="t('admin.proxyGroups.binding.group')">
+        <option v-for="group in proxyGroups" :key="`group-${group.id}`" :value="`group:${group.id}`">
+          {{ group.name }} · {{ group.available_member_count }}/{{ group.member_count }}
+        </option>
+      </optgroup>
+
+      <optgroup v-if="proxies.length" :label="t('admin.proxyGroups.binding.proxy')">
+        <option v-for="proxy in proxies" :key="`proxy-${proxy.id}`" :value="`proxy:${proxy.id}`">
+          {{ proxy.name }} ({{ proxy.protocol }}://{{ proxy.host }}:{{ proxy.port }})
+        </option>
+      </optgroup>
     </select>
 
-    <select v-if="bindingMode === 'proxy'" v-model="selectedProxyId" class="input" :disabled="disabled">
-      <option :value="null">{{ t('admin.proxyGroups.binding.chooseProxy') }}</option>
-      <option v-for="proxy in proxies" :key="proxy.id" :value="proxy.id">
-        {{ proxy.name }} ({{ proxy.protocol }}://{{ proxy.host }}:{{ proxy.port }})
-      </option>
-    </select>
-
-    <select v-if="bindingMode === 'group'" v-model="selectedGroupId" class="input" :disabled="disabled">
-      <option :value="null">{{ t('admin.proxyGroups.binding.chooseGroup') }}</option>
-      <option v-for="group in proxyGroups" :key="group.id" :value="group.id">
-        {{ group.name }} · {{ group.available_member_count }}/{{ group.member_count }}
-      </option>
-    </select>
-
-    <p v-if="bindingMode === 'group' && selectedGroup" class="input-hint">
+    <p v-if="selectedGroup" class="input-hint">
       {{ t('admin.proxyGroups.binding.groupHint', {
         available: selectedGroup.available_member_count,
         total: selectedGroup.member_count
@@ -56,41 +50,34 @@ const emit = defineEmits<{
   'update:proxyGroupId': [value: number | null]
 }>()
 
-type BindingMode = 'none' | 'proxy' | 'group'
+type BindingKey = 'none' | `proxy:${number}` | `group:${number}`
 
-const bindingMode = computed<BindingMode>({
+const selectedBindingKey = computed<BindingKey>({
   get: () => {
-    if (props.proxyGroupId !== null) return 'group'
-    if (props.proxyId !== null) return 'proxy'
+    if (props.proxyGroupId !== null) return `group:${props.proxyGroupId}` as BindingKey
+    if (props.proxyId !== null) return `proxy:${props.proxyId}` as BindingKey
     return 'none'
   },
-  set: (mode) => {
-    if (mode === 'proxy') {
+  set: (value: BindingKey) => {
+    if (value === 'none') {
+      emit('update:proxyId', null)
       emit('update:proxyGroupId', null)
       return
     }
-    if (mode === 'group') {
+
+    const separatorIndex = value.indexOf(':')
+    const type = value.slice(0, separatorIndex)
+    const id = Number(value.slice(separatorIndex + 1))
+    if (!['group', 'proxy'].includes(type) || !Number.isInteger(id)) return
+
+    if (type === 'group') {
       emit('update:proxyId', null)
+      emit('update:proxyGroupId', id)
       return
     }
-    emit('update:proxyId', null)
+
     emit('update:proxyGroupId', null)
-  }
-})
-
-const selectedProxyId = computed({
-  get: () => props.proxyId,
-  set: (value: number | null) => {
-    emit('update:proxyId', value)
-    if (value !== null) emit('update:proxyGroupId', null)
-  }
-})
-
-const selectedGroupId = computed({
-  get: () => props.proxyGroupId,
-  set: (value: number | null) => {
-    emit('update:proxyGroupId', value)
-    if (value !== null) emit('update:proxyId', null)
+    emit('update:proxyId', id)
   }
 })
 
