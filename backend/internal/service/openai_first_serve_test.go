@@ -226,7 +226,7 @@ func TestFirstServeIngressRotation(t *testing.T) {
 					errCh <- err
 					return
 				}
-				defer conn.CloseNow()
+				defer func() { _ = conn.CloseNow() }()
 				c, _ := gin.CreateTestContext(httptest.NewRecorder())
 				c.Request = r.Clone(r.Context())
 				_, first, err := conn.Read(r.Context())
@@ -241,7 +241,7 @@ func TestFirstServeIngressRotation(t *testing.T) {
 			defer cancel()
 			client, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
 			require.NoError(t, err)
-			defer client.CloseNow()
+			defer func() { _ = client.CloseNow() }()
 			first := `{"type":"response.create","model":"gpt-5.1","store":false,"input":[{"role":"user","content":"question A"}]}`
 			if tc.missingParent {
 				first = `{"type":"response.create","model":"gpt-5.1","store":true,"previous_response_id":"resp_external","input":[{"role":"user","content":"question A"}]}`
@@ -255,16 +255,16 @@ func TestFirstServeIngressRotation(t *testing.T) {
 				}
 			}
 			if tc.reconnect {
-				client.CloseNow()
+				_ = client.CloseNow()
 				require.NoError(t, <-errCh)
 				client, _, err = coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
 				require.NoError(t, err)
-				defer client.CloseNow()
+				defer func() { _ = client.CloseNow() }()
 			}
 			require.NoError(t, client.Write(ctx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","store":false,"previous_response_id":"resp_a","input":[{"role":"user","content":"question B"}]}`)))
 			_, _, err = client.Read(ctx)
 			require.NoError(t, err)
-			client.CloseNow()
+			_ = client.CloseNow()
 			require.NoError(t, <-errCh)
 			dialer.mu.Lock()
 			proxies := append([]string(nil), dialer.proxies...)
