@@ -1648,7 +1648,14 @@
           <label class="input-label mb-0">{{ t('admin.accounts.proxy') }}</label>
           <ProxyAdBanner />
         </div>
-        <ProxySelector v-model="form.proxy_id" :proxies="proxies" />
+        <ProxyBindingSelector
+          :proxy-id="form.proxy_id"
+          :proxy-group-id="form.proxy_group_id"
+          :proxies="proxies"
+          :proxy-groups="props.proxyGroups"
+          @update:proxy-id="form.proxy_id = $event"
+          @update:proxy-group-id="form.proxy_group_id = $event"
+        />
       </div>
 
       <UpstreamRequestIdHeaderField
@@ -3034,6 +3041,7 @@ import type {
   OpenAICompactMode,
   OpenAIResponsesMode,
   OpenAIEndpointCapability,
+  ProxyGroup,
   OllamaCloudUsageState,
   GrokMediaEligibilityMode,
   GrokMediaEligibilityState
@@ -3045,7 +3053,7 @@ import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
-import ProxySelector from '@/components/common/ProxySelector.vue'
+import ProxyBindingSelector from '@/components/common/ProxyBindingSelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
@@ -3118,9 +3126,12 @@ interface Props {
   account: Account | null
   proxies: Proxy[]
   groups: AdminGroup[]
+  proxyGroups?: ProxyGroup[]
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), {
+  proxyGroups: () => []
+})
 const emit = defineEmits<{
   close: []
   updated: [account: Account]
@@ -3845,6 +3856,7 @@ const form = reactive({
   name: '',
   notes: '',
   proxy_id: null as number | null,
+  proxy_group_id: null as number | null,
   concurrency: 1,
   load_factor: null as number | null,
   priority: 1,
@@ -3953,6 +3965,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   form.name = newAccount.name
   form.notes = newAccount.notes || ''
   form.proxy_id = newAccount.proxy_id
+  form.proxy_group_id = newAccount.proxy_group_id ?? null
   form.concurrency = newAccount.concurrency
   form.load_factor = newAccount.load_factor ?? null
   form.priority = newAccount.priority
@@ -4972,8 +4985,10 @@ const handleSubmit = async () => {
 
   const updatePayload: Record<string, unknown> = { ...form }
   try {
-    // 后端期望 proxy_id: 0 表示清除代理，而不是 null
-    if (updatePayload.proxy_id === null) {
+    // 代理组与单个代理互斥；清除绑定时用 0 表达清除单代理。
+    if (updatePayload.proxy_group_id != null) {
+      delete updatePayload.proxy_id
+    } else if (updatePayload.proxy_id === null) {
       updatePayload.proxy_id = 0
     }
     if (form.expires_at === null) {

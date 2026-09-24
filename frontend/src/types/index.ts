@@ -969,6 +969,19 @@ export interface Proxy {
   updated_at: string
 }
 
+export interface ProxyGroup {
+  id: number
+  name: string
+  description?: string | null
+  status: 'active' | 'inactive'
+  proxy_ids: number[]
+  member_count: number
+  available_member_count: number
+  account_count: number
+  created_at: string
+  updated_at: string
+}
+
 export interface ProxyAccountSummary {
   id: number
   name: string
@@ -1199,6 +1212,7 @@ export interface Account {
     }
   } & Record<string, unknown>)
   proxy_id: number | null
+  proxy_group_id: number | null
   proxy_fallback_origin_id?: number | null
   proxy_fallback_origin_name?: string | null
   concurrency: number
@@ -1485,6 +1499,7 @@ export interface CreateAccountRequest {
   credentials: Record<string, unknown>
   extra?: Record<string, unknown>
   proxy_id?: number | null
+  proxy_group_id?: number | null
   concurrency?: number
   load_factor?: number | null
   priority?: number
@@ -1503,6 +1518,7 @@ export interface UpdateAccountRequest {
   credentials?: Record<string, unknown>
   extra?: Record<string, unknown>
   proxy_id?: number | null
+  proxy_group_id?: number | null
   concurrency?: number
   load_factor?: number | null
   priority?: number

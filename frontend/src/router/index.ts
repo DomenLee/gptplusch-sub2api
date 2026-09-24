@@ -596,6 +596,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/proxy-groups',
+    name: 'AdminProxyGroups',
+    component: () => import('@/views/admin/ProxyGroupsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Proxy Groups',
+      titleKey: 'admin.proxyGroups.title',
+      descriptionKey: 'admin.proxyGroups.description'
+    }
+  },
+  {
     path: '/admin/redeem',
     name: 'AdminRedeem',
     component: () => import('@/views/admin/RedeemView.vue'),

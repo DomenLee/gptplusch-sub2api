@@ -1334,6 +1334,9 @@ func (s *GatewayService) DoGrokNativeResponsesJSON(ctx context.Context, account 
 	if account == nil {
 		return nil, errors.New("account is required")
 	}
+	if err := resolveDefaultProxyGroupAccount(ctx, account); err != nil {
+		return nil, err
+	}
 	if !account.IsGrok() {
 		return nil, errors.New("grok account required")
 	}

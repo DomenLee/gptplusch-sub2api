@@ -66,6 +66,7 @@ func RegisterAdminRoutes(
 
 		// 代理管理
 		registerProxyRoutes(admin, h, stepUpAuth)
+		registerProxyGroupRoutes(admin, h)
 
 		// 卡密管理
 		registerRedeemCodeRoutes(admin, h)
@@ -133,6 +134,18 @@ func RegisterAdminRoutes(
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
+	}
+}
+
+func registerProxyGroupRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	groups := admin.Group("/proxy-groups")
+	{
+		groups.GET("", h.Admin.ProxyGroup.List)
+		groups.GET("/all", h.Admin.ProxyGroup.GetAll)
+		groups.GET("/:id", h.Admin.ProxyGroup.GetByID)
+		groups.POST("", h.Admin.ProxyGroup.Create)
+		groups.PUT("/:id", h.Admin.ProxyGroup.Update)
+		groups.DELETE("/:id", h.Admin.ProxyGroup.Delete)
 	}
 }
 
