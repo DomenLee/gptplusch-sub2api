@@ -2537,7 +2537,7 @@ onMounted(async () => {
   load()
   loadUpstreamBillingProbeGlobalState()
   const [proxiesResult, groupsResult, proxyGroupsResult] = await Promise.allSettled([
-    adminAPI.proxies.getAll(),
+    adminAPI.proxies.getAllWithCount(),
     adminAPI.groups.getAll(),
     adminAPI.proxyGroups?.getAll ? adminAPI.proxyGroups.getAll() : Promise.resolve([])
   ])

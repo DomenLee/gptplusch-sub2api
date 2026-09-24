@@ -1888,6 +1888,19 @@
         </div>
       </div>
 
+      <FirstServeSettings
+        v-if="show && account?.platform === 'openai' && openaiResponsesWebSocketV2Mode === OPENAI_WS_MODE_FIRST_SERVE"
+        ref="firstServeSettings"
+        v-model="firstServeConfig"
+        :proxy-group-id="form.proxy_group_id"
+        :account-name="form.name"
+        :proxies="proxies"
+        :proxy-groups="proxyGroups"
+        @update:proxy-group-id="form.proxy_group_id = $event; form.proxy_id = null"
+      >
+        <FirstServeStatus :account-id="account.id" :account-name="account.name" />
+      </FirstServeSettings>
+
       <!-- OpenAI APIKey Responses API support mode -->
       <div
         v-if="account?.platform === 'openai' && account?.type === 'apikey'"
@@ -3141,6 +3154,8 @@ import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestId
 import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProxyBindingSelector from '@/components/common/ProxyBindingSelector.vue'
+import FirstServeSettings from '@/components/account/FirstServeSettings.vue'
+import { readFirstServeConfig } from '@/utils/firstServe'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
@@ -3149,6 +3164,7 @@ import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import CnBaseUrlPresets from '@/components/account/CnBaseUrlPresets.vue'
 import OpenCodeGoProtocolRulesEditor from '@/components/account/OpenCodeGoProtocolRulesEditor.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
+import FirstServeStatus from '@/components/account/FirstServeStatus.vue'
 import OllamaCloudUsageSettings from '@/components/account/OllamaCloudUsageSettings.vue'
 import {
   applyAntigravityProjectID,
@@ -3192,6 +3208,7 @@ import { getAccountExpiryTimestamp } from '@/components/account/accountExpiry'
 import { allSelectedGroupsEnableLongContextPricing } from '@/components/account/longContextBilling'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import {
+  OPENAI_WS_MODE_FIRST_SERVE,
   OPENAI_WS_MODE_CTX_POOL,
   OPENAI_WS_MODE_OFF,
   OPENAI_WS_MODE_PASSTHROUGH,
@@ -3748,9 +3765,13 @@ const codexFingerprintModeOptions = computed(() => [
   { value: 'full' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintFull') },
 ])
 
+const firstServeConfig = ref(readFirstServeConfig())
+const firstServeSettings = ref<InstanceType<typeof FirstServeSettings>>()
+
 const openAIWSModeOptions = computed(() => [
   { value: OPENAI_WS_MODE_OFF, label: t('admin.accounts.openai.wsModeOff') },
   { value: OPENAI_WS_MODE_CTX_POOL, label: t('admin.accounts.openai.wsModeCtxPool') },
+  { value: OPENAI_WS_MODE_FIRST_SERVE, label: t('admin.accounts.openai.wsModeFirstServe') },
   { value: OPENAI_WS_MODE_PASSTHROUGH, label: t('admin.accounts.openai.wsModePassthrough') },
   { value: OPENAI_WS_MODE_HTTP_BRIDGE, label: t('admin.accounts.openai.wsModeHttpBridge') }
 ])
@@ -4164,6 +4185,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   mixedScheduling.value = false
   allowOverages.value = false
 	const extra = newAccount.extra as Record<string, unknown> | undefined
+  firstServeConfig.value = readFirstServeConfig(extra)
 	mixedScheduling.value = extra?.mixed_scheduling === true
 	allowOverages.value = extra?.allow_overages === true
 	upstreamRequestIdHeader.value = readUpstreamRequestIdHeader(extra)
@@ -5139,6 +5161,11 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
 
 const handleSubmit = async () => {
   if (!props.account) return
+  if (props.account.platform === 'openai' && openaiResponsesWebSocketV2Mode.value === OPENAI_WS_MODE_FIRST_SERVE && firstServeSettings.value && !firstServeSettings.value.validate()) return
+  if (props.account.platform === 'openai' && openaiResponsesWebSocketV2Mode.value === OPENAI_WS_MODE_FIRST_SERVE && !form.proxy_group_id) {
+    appStore.showError(t('admin.accounts.openai.firstServeProxyRequired', { name: form.name }))
+    return
+  }
   const accountID = props.account.id
 
   if (form.status !== 'active' && form.status !== 'inactive' && form.status !== 'error') {
@@ -5676,6 +5703,9 @@ const handleSubmit = async () => {
     if (props.account.platform === 'openai' && (props.account.type === 'oauth' || props.account.type === 'setup-token' || props.account.type === 'apikey')) {
       const currentExtra = (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
+      if (openaiResponsesWebSocketV2Mode.value === OPENAI_WS_MODE_FIRST_SERVE) {
+        newExtra.openai_first_serve = { ...firstServeConfig.value, proxy_ids: [...firstServeConfig.value.proxy_ids] }
+      }
       const hadCodexCLIOnlyEnabled = currentExtra.codex_cli_only === true
       if (props.account.type === 'oauth' || props.account.type === 'setup-token') {
         newExtra.openai_oauth_responses_websockets_v2_mode = openaiOAuthResponsesWebSocketV2Mode.value

@@ -127,6 +127,10 @@ func (r *proxyGroupRepository) CountAccountsByGroupID(ctx context.Context, id in
 }
 
 func (r *proxyGroupRepository) SelectRandomAvailableProxy(ctx context.Context, groupID int64) (*service.Proxy, error) {
+	return r.SelectAvailableProxyExcluding(ctx, groupID, 0, nil)
+}
+
+func (r *proxyGroupRepository) SelectAvailableProxyExcluding(ctx context.Context, groupID, previousID int64, allowedIDs []int64) (*service.Proxy, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT p.id, p.name, p.protocol, p.host, p.port, COALESCE(p.username, ''), COALESCE(p.password, ''), p.status, p.created_at, p.updated_at, p.expires_at, p.fallback_mode, p.backup_proxy_id, p.expiry_warn_days
 		FROM proxy_groups pg
@@ -134,8 +138,10 @@ func (r *proxyGroupRepository) SelectRandomAvailableProxy(ctx context.Context, g
 		JOIN proxies p ON p.id = pgp.proxy_id
 		WHERE pg.id=$1 AND pg.deleted_at IS NULL AND pg.status='active'
 		  AND p.deleted_at IS NULL AND p.status='active'
+		  AND p.id <> $2
+		  AND ($3::bigint[] IS NULL OR p.id = ANY($3::bigint[]))
 		  AND (p.expires_at IS NULL OR p.expires_at > NOW())
-		ORDER BY random() LIMIT 1`, groupID)
+		ORDER BY random() LIMIT 1`, groupID, previousID, pq.Array(allowedIDs))
 	proxy := &service.Proxy{}
 	if err := row.Scan(&proxy.ID, &proxy.Name, &proxy.Protocol, &proxy.Host, &proxy.Port, &proxy.Username, &proxy.Password, &proxy.Status, &proxy.CreatedAt, &proxy.UpdatedAt, &proxy.ExpiresAt, &proxy.FallbackMode, &proxy.BackupProxyID, &proxy.ExpiryWarnDays); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

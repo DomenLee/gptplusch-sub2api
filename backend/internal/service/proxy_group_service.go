@@ -173,3 +173,21 @@ func (s *ProxyGroupService) ResolveAccountProxy(ctx context.Context, account *Ac
 	account.proxyGroupResolved = true
 	return nil
 }
+
+// SelectNextProxy selects a different active, unexpired member for a first-serve rotation.
+func (s *ProxyGroupService) SelectNextProxy(ctx context.Context, groupID, previousID int64, allowedIDs []int64) (*Proxy, error) {
+	selector, ok := s.repo.(interface {
+		SelectAvailableProxyExcluding(context.Context, int64, int64, []int64) (*Proxy, error)
+	})
+	if !ok {
+		return nil, ErrProxyGroupNoProxy
+	}
+	proxy, err := selector.SelectAvailableProxyExcluding(ctx, groupID, previousID, allowedIDs)
+	if err != nil {
+		return nil, err
+	}
+	if proxy == nil {
+		return nil, ErrProxyGroupNoProxy
+	}
+	return proxy, nil
+}

@@ -1,0 +1,77 @@
+<template>
+  <div class="mt-3 space-y-2 rounded-lg bg-gray-50 p-3 text-xs dark:bg-dark-700" aria-live="polite">
+    <div class="flex items-center justify-between gap-2">
+      <span class="font-medium">{{ t('admin.accounts.openai.firstServeStatus') }}</span>
+      <button type="button" class="text-primary-600" :disabled="loading" @click="load">
+        {{ t('common.refresh') }}
+      </button>
+    </div>
+    <p v-if="error" role="alert" class="text-red-600 dark:text-red-400">{{ error }}</p>
+    <p v-else-if="!rows.length" class="text-gray-500">{{ t('admin.accounts.openai.firstServeEmpty') }}</p>
+    <div v-for="row in rows" :key="row.id" class="space-y-1 border-t border-gray-200 pt-2 dark:border-dark-600">
+      <p>{{ accountName }} · {{ row.proxy_name || '#' + row.proxy_id }} · {{ row.conn_id || '—' }}</p>
+      <p :class="warning(row.reason) ? 'text-amber-700 dark:text-amber-400' : 'text-gray-600 dark:text-gray-300'" :role="warning(row.reason) ? 'alert' : undefined">
+        {{ t(`admin.accounts.openai.firstServeReasons.${row.reason}`, {
+          threshold: row.config?.ttft_seconds ?? 15,
+          switches: row.config?.max_switches ?? 3,
+          cooldown: row.config?.cooldown_seconds ?? 60
+        }) }}
+      </p>
+      <p class="text-gray-500">
+        {{ t('admin.accounts.openai.firstServeMetrics', {
+          latency: row.first_token_ms == null ? '—' : (row.first_token_ms / 1000).toFixed(2),
+          expires: new Date(row.expires_at).toLocaleTimeString(),
+          rotations: row.rotations
+        }) }}
+        <span v-if="!row.active"> · {{ t('admin.accounts.openai.firstServeEnded') }}</span>
+      </p>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { onBeforeUnmount, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { getFirstServeStatus, type FirstServeStatus } from '@/api/admin/accounts'
+
+const props = defineProps<{ accountId: number; accountName: string }>()
+const { t } = useI18n()
+const rows = ref<FirstServeStatus[]>([])
+const error = ref('')
+const loading = ref(false)
+let timer: ReturnType<typeof setTimeout> | undefined
+let request: AbortController | undefined
+let disposed = false
+
+const warning = (reason: string) => ['context_incomplete', 'proxy_unavailable', 'cooldown', 'connection_failed'].includes(reason)
+
+async function load() {
+  if (disposed) return
+  clearTimeout(timer)
+  request?.abort()
+  const current = new AbortController()
+  request = current
+  loading.value = true
+  try {
+    const result = await getFirstServeStatus(props.accountId, current.signal)
+    if (current.signal.aborted) return
+    rows.value = result
+    error.value = ''
+  } catch {
+    if (current.signal.aborted) return
+    error.value = t('admin.accounts.openai.firstServeLoadFailed', { name: props.accountName })
+  } finally {
+    if (!current.signal.aborted && !disposed) {
+      loading.value = false
+      timer = setTimeout(load, 10000)
+    }
+  }
+}
+
+watch(() => props.accountId, () => { rows.value = []; void load() }, { immediate: true })
+onBeforeUnmount(() => {
+  disposed = true
+  clearTimeout(timer)
+  request?.abort()
+})
+</script>

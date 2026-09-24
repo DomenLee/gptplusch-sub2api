@@ -1,0 +1,111 @@
+<template>
+  <section ref="panel" class="space-y-4 rounded-xl border border-primary-200 bg-primary-50/40 p-4 dark:border-primary-800 dark:bg-primary-950/20" data-testid="first-serve-settings">
+    <div>
+      <p class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ t(`${prefix}.title`) }}</p>
+      <p class="input-hint">{{ t(`${prefix}.hint`) }}</p>
+    </div>
+    <div class="grid gap-4 sm:grid-cols-2">
+      <label v-for="field in firstServeFields.slice(0, 2)" :key="field.key" class="block">
+        <span class="input-label">{{ t(`${prefix}.${field.key}`) }}</span>
+        <input :value="modelValue[field.key]" :data-testid="`first-serve-${field.key}`" type="number" class="input" required :min="field.min" :max="field.max" step="1" @input="set(field.key, Number(($event.target as HTMLInputElement).value))" />
+        <span class="input-hint">{{ t(`${prefix}.range`, { min: field.min, max: field.max }) }}</span>
+      </label>
+    </div>
+    <label class="block">
+      <span class="input-label">{{ t(`${prefix}.group`) }}</span>
+      <select :value="proxyGroupId ?? ''" class="input" data-testid="first-serve-group" @change="emit('update:proxyGroupId', Number(($event.target as HTMLSelectElement).value) || null)">
+        <option value="">{{ t(`${prefix}.chooseGroup`) }}</option>
+        <option v-for="group in proxyGroups" :key="group.id" :value="group.id">{{ group.name }} · {{ group.available_member_count }}/{{ group.member_count }}</option>
+      </select>
+    </label>
+    <div class="space-y-2">
+      <label class="block">
+        <span class="input-label">{{ t(`${prefix}.proxies`) }}</span>
+        <select :value="modelValue.proxy_mode" class="input" data-testid="first-serve-proxy-mode" @change="setMode(($event.target as HTMLSelectElement).value)">
+          <option value="all">{{ t(`${prefix}.all`) }}</option>
+          <option value="selected">{{ t(`${prefix}.selected`) }}</option>
+        </select>
+      </label>
+      <p class="input-hint">{{ t(`${prefix}.proxyHint`) }}</p>
+      <div v-if="modelValue.proxy_mode === 'selected'" class="max-h-52 space-y-2 overflow-y-auto rounded-lg border border-gray-200 p-3 dark:border-dark-600">
+        <p v-if="!members.length" class="text-xs text-gray-500">{{ t(`${prefix}.noMembers`) }}</p>
+        <label v-for="proxy in members" :key="proxy.id" class="flex cursor-pointer items-start gap-2 text-sm">
+          <input type="checkbox" class="mt-1" :data-testid="`first-serve-proxy-${proxy.id}`" :checked="modelValue.proxy_ids.includes(proxy.id)" @change="toggle(proxy.id)" />
+          <span class="min-w-0 break-all">
+            {{ proxy.name }} · {{ proxy.host }}:{{ proxy.port }}
+            <span class="block text-xs text-gray-500">{{ t(`${prefix}.exitIP`, { ip: proxy.ip_address || '—' }) }}<span v-if="!available(proxy)"> · {{ t(`${prefix}.unavailable`) }}</span></span>
+          </span>
+        </label>
+        <div v-for="id in missing" :key="id" class="flex items-center justify-between gap-2 text-xs text-red-600 dark:text-red-400">
+          <span>{{ t(`${prefix}.missingProxy`, { id }) }}</span>
+          <button type="button" class="underline" @click="toggle(id)">{{ t('common.remove') }}</button>
+        </div>
+      </div>
+    </div>
+    <details>
+      <summary class="cursor-pointer text-sm font-medium">{{ t(`${prefix}.advanced`) }}</summary>
+      <p class="input-hint mt-2">{{ t(`${prefix}.retryHint`) }}</p>
+      <div class="mt-3 grid gap-4 sm:grid-cols-2">
+        <label v-for="field in firstServeFields.slice(2)" :key="field.key" class="block">
+          <span class="input-label">{{ t(`${prefix}.${field.key}`) }}</span>
+          <input :value="modelValue[field.key]" :data-testid="`first-serve-${field.key}`" type="number" class="input" required :min="field.min" :max="field.max" step="1" @input="set(field.key, Number(($event.target as HTMLInputElement).value))" />
+          <span class="input-hint">{{ t(`${prefix}.range`, { min: field.min, max: field.max }) }}</span>
+        </label>
+      </div>
+    </details>
+    <p v-if="issue" role="alert" class="text-sm text-red-600 dark:text-red-400">{{ issueText }}</p>
+    <p v-else-if="availableCount < 2" role="status" class="text-xs text-amber-700 dark:text-amber-400">{{ t(`${prefix}.fewAvailable`, { name: accountName, count: availableCount }) }}</p>
+    <slot />
+  </section>
+</template>
+
+<script setup lang="ts">
+import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import type { Proxy, ProxyGroup } from '@/types'
+import { firstServeFields, firstServeIssue, type FirstServeConfig } from '@/utils/firstServe'
+
+const props = defineProps<{
+  modelValue: FirstServeConfig
+  proxyGroupId: number | null
+  accountName: string
+  proxies: Proxy[]
+  proxyGroups: ProxyGroup[]
+}>()
+const emit = defineEmits<{
+  'update:modelValue': [value: FirstServeConfig]
+  'update:proxyGroupId': [value: number | null]
+}>()
+const { t } = useI18n()
+const prefix = 'admin.accounts.openai.firstServeSettings'
+const panel = ref<HTMLElement>()
+const group = computed(() => props.proxyGroups.find(item => item.id === props.proxyGroupId))
+const members = computed(() => props.proxies.filter(proxy => group.value?.proxy_ids.includes(proxy.id)))
+const missing = computed(() => props.modelValue.proxy_ids.filter(id => !members.value.some(proxy => proxy.id === id)))
+const available = (proxy: Proxy) => group.value?.status === 'active' && proxy.status === 'active' && (!proxy.expires_at || new Date(proxy.expires_at).getTime() > Date.now())
+const availableCount = computed(() => members.value.filter(proxy => available(proxy) && (props.modelValue.proxy_mode === 'all' || props.modelValue.proxy_ids.includes(proxy.id))).length)
+const issue = computed(() => firstServeIssue(props.modelValue, props.proxyGroupId, props.proxyGroups))
+const issueText = computed(() => {
+  if (!issue.value) return ''
+  const params: Record<string, unknown> = { ...issue.value.params, name: props.accountName }
+  if ('field' in params) params.field = t(`${prefix}.${params.field}`)
+  return t(`${prefix}.${issue.value.key}`, params)
+})
+
+function set<K extends keyof FirstServeConfig>(key: K, value: FirstServeConfig[K]) {
+  emit('update:modelValue', { ...props.modelValue, [key]: value })
+}
+function setMode(value: string) {
+  emit('update:modelValue', { ...props.modelValue, proxy_mode: value === 'selected' ? 'selected' : 'all', proxy_ids: [] })
+}
+function toggle(id: number) {
+  const ids = props.modelValue.proxy_ids
+  set('proxy_ids', ids.includes(id) ? ids.filter(value => value !== id) : [...ids, id])
+}
+function validate() {
+  if (!issue.value) return true
+  panel.value?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+  return false
+}
+defineExpose({ validate })
+</script>

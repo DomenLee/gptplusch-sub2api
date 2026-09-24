@@ -3149,6 +3149,17 @@
         </div>
       </div>
 
+      <FirstServeSettings
+        v-if="show && form.platform === 'openai' && openaiResponsesWebSocketV2Mode === OPENAI_WS_MODE_FIRST_SERVE"
+        ref="firstServeSettings"
+        v-model="firstServeConfig"
+        :proxy-group-id="form.proxy_group_id"
+        :account-name="form.name"
+        :proxies="proxies"
+        :proxy-groups="proxyGroups"
+        @update:proxy-group-id="form.proxy_group_id = $event; form.proxy_id = null"
+      />
+
       <!-- Anthropic API Key 自动透传开关 -->
       <div
         v-if="form.platform === 'anthropic' && accountCategory === 'apikey'"
@@ -3938,6 +3949,8 @@ import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestId
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProxyBindingSelector from '@/components/common/ProxyBindingSelector.vue'
+import FirstServeSettings from '@/components/account/FirstServeSettings.vue'
+import { readFirstServeConfig } from '@/utils/firstServe'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
@@ -3978,6 +3991,7 @@ import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { getAccountExpiryTimestamp } from '@/components/account/accountExpiry'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import {
+  OPENAI_WS_MODE_FIRST_SERVE,
   OPENAI_WS_MODE_CTX_POOL,
   OPENAI_WS_MODE_OFF,
   OPENAI_WS_MODE_PASSTHROUGH,
@@ -4642,9 +4656,13 @@ const geminiSelectedTier = computed(() => {
   }
 })
 
+const firstServeConfig = ref(readFirstServeConfig())
+const firstServeSettings = ref<InstanceType<typeof FirstServeSettings>>()
+
 const openAIWSModeOptions = computed(() => [
   { value: OPENAI_WS_MODE_OFF, label: t('admin.accounts.openai.wsModeOff') },
   { value: OPENAI_WS_MODE_CTX_POOL, label: t('admin.accounts.openai.wsModeCtxPool') },
+  { value: OPENAI_WS_MODE_FIRST_SERVE, label: t('admin.accounts.openai.wsModeFirstServe') },
   { value: OPENAI_WS_MODE_PASSTHROUGH, label: t('admin.accounts.openai.wsModePassthrough') },
   { value: OPENAI_WS_MODE_HTTP_BRIDGE, label: t('admin.accounts.openai.wsModeHttpBridge') }
 ])
@@ -5305,6 +5323,7 @@ const submitCreateAccount = async (payload: CreateAccountRequest) => {
 
 // Methods
 const resetForm = () => {
+  firstServeConfig.value = readFirstServeConfig()
   step.value = 1
   form.name = ''
   form.notes = ''
@@ -5434,6 +5453,9 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
   }
 
   const extra: Record<string, unknown> = { ...(base || {}) }
+  if (openaiResponsesWebSocketV2Mode.value === OPENAI_WS_MODE_FIRST_SERVE) {
+    extra.openai_first_serve = { ...firstServeConfig.value, proxy_ids: [...firstServeConfig.value.proxy_ids] }
+  }
   if (accountCategory.value === 'oauth-based') {
     extra.openai_oauth_responses_websockets_v2_mode = openaiOAuthResponsesWebSocketV2Mode.value
     extra.openai_oauth_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiOAuthResponsesWebSocketV2Mode.value)
@@ -5632,6 +5654,11 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
 }
 
 const handleSubmit = async () => {
+  if (form.platform === 'openai' && openaiResponsesWebSocketV2Mode.value === OPENAI_WS_MODE_FIRST_SERVE && firstServeSettings.value && !firstServeSettings.value.validate()) return
+  if (form.platform === 'openai' && openaiResponsesWebSocketV2Mode.value === OPENAI_WS_MODE_FIRST_SERVE && !form.proxy_group_id) {
+    appStore.showError(t('admin.accounts.openai.firstServeProxyRequired', { name: form.name }))
+    return
+  }
   // For OAuth-based type, handle OAuth flow (goes to step 2)
   if (isOAuthFlow.value) {
     if (!isGrokSSOInputMethod.value && !form.name.trim()) {

@@ -214,6 +214,32 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
 
   afterEach(() => vi.useRealTimers())
 
+  it('creates an account with custom first serve settings and resets them when reopened', async () => {
+    const wrapper = mountModal()
+    await wrapper.setProps({ proxyGroups: [{ id: 10, name: 'Group A', status: 'active', proxy_ids: [1, 2], member_count: 2, available_member_count: 2, account_count: 0, created_at: '', updated_at: '' }] })
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('first serve account')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    wrapper.get('[data-testid="create-openai-ws-mode"]').getComponent({ name: 'Select' }).vm.$emit('update:modelValue', 'first_serve')
+    await flushPromises()
+    await wrapper.get('[data-testid="first-serve-group"]').setValue('10')
+    await wrapper.get('[data-testid="first-serve-ttl_minutes"]').setValue('12')
+    await wrapper.get('[data-testid="first-serve-ttft_seconds"]').setValue('6')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.extra?.openai_first_serve).toEqual({ ttl_minutes: 12, ttft_seconds: 6, max_switches: 3, cooldown_seconds: 60, proxy_mode: 'all', proxy_ids: [] })
+    expect(createAccountMock.mock.calls[0]?.[0]?.proxy_group_id).toBe(10)
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    await selectButtonByText(wrapper, 'OpenAI')
+    wrapper.get('[data-testid="create-openai-ws-mode"]').getComponent({ name: 'Select' }).vm.$emit('update:modelValue', 'first_serve')
+    await flushPromises()
+    expect((wrapper.get('[data-testid="first-serve-ttl_minutes"]').element as HTMLInputElement).value).toBe('30')
+    wrapper.unmount()
+  })
+
   it('sets month and year expiry presets without submitting the account form', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-01-31T12:34:00'))

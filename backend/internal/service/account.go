@@ -2152,6 +2152,7 @@ const (
 	OpenAIWSIngressModeShared      = "shared"
 	OpenAIWSIngressModeDedicated   = "dedicated"
 	OpenAIWSIngressModeCtxPool     = "ctx_pool"
+	OpenAIWSIngressModeFirstServe  = "first_serve"
 	OpenAIWSIngressModePassthrough = "passthrough"
 	OpenAIWSIngressModeHTTPBridge  = "http_bridge"
 )
@@ -2160,6 +2161,8 @@ func normalizeOpenAIWSIngressMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case OpenAIWSIngressModeOff:
 		return OpenAIWSIngressModeOff
+	case OpenAIWSIngressModeFirstServe:
+		return OpenAIWSIngressModeFirstServe
 	case OpenAIWSIngressModeCtxPool:
 		return OpenAIWSIngressModeCtxPool
 	case OpenAIWSIngressModePassthrough:
