@@ -382,6 +382,15 @@
           <template #cell-actions="{ row }">
             <div class="flex items-center gap-1">
               <button
+                v-if="row.platform === 'openai'"
+                data-testid="group-evaluate"
+                @click="evaluationTarget = { id: row.id, name: row.name, type: 'group' }"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-purple-600 dark:hover:bg-dark-700 dark:hover:text-purple-400"
+              >
+                <Icon name="chart" size="sm" />
+                <span class="text-xs">{{ t('admin.modelEvaluation.action') }}</span>
+              </button>
+              <button
                 @click="handleEdit(row)"
                 class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700 dark:hover:text-primary-400"
               >
@@ -4298,6 +4307,7 @@
       </template>
     </BaseDialog>
 
+    <ModelEvaluationModal v-if="evaluationTarget" :target="evaluationTarget" @close="evaluationTarget = null" />
     <!-- Group Rate Multipliers Modal -->
     <GroupRateMultipliersModal
       :show="showRateMultipliersModal"
@@ -4323,6 +4333,8 @@ import { useAppStore } from "@/stores/app";
 import { useAuthStore } from "@/stores/auth";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { adminAPI } from "@/api/admin";
+import ModelEvaluationModal from "@/components/admin/ModelEvaluationModal.vue";
+import type { EvaluationTarget } from "@/api/admin/modelEvaluation";
 import type {
   AdminGroup,
   CodexModelsManifestConfig,
@@ -4907,6 +4919,7 @@ const sortState = reactive({
 let abortController: AbortController | null = null;
 
 const showCreateModal = ref(false);
+const evaluationTarget = ref<EvaluationTarget | null>(null);
 const showEditModal = ref(false);
 const showDeleteDialog = ref(false);
 const pendingLiveForm = ref<"create" | "edit" | null>(null);

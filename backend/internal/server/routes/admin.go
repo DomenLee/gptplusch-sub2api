@@ -46,6 +46,15 @@ func RegisterAdminRoutes(
 		// 账号管理
 		registerAccountRoutes(admin, h, stepUpAuth)
 
+		// 评测报告和原始账号信息当前仅对管理员开放。
+		if h.Admin.ModelEvaluation != nil {
+			evaluation := admin.Group("/model-evaluation")
+			evaluation.POST("/reports", h.Admin.ModelEvaluation.Create)
+			evaluation.GET("/reports", h.Admin.ModelEvaluation.List)
+			evaluation.GET("/reports/:id", h.Admin.ModelEvaluation.Get)
+			evaluation.POST("/reports/:id/rounds", h.Admin.ModelEvaluation.Run)
+		}
+
 		// 公告管理
 		registerAnnouncementRoutes(admin, h)
 
