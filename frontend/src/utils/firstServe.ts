@@ -20,7 +20,7 @@ export const firstServeFields = [
 export function readFirstServeConfig(extra?: Record<string, unknown>): FirstServeConfig {
   const defaults: FirstServeConfig = {
     ttl_minutes: 30, ttft_seconds: 15, max_switches: 3, cooldown_seconds: 60,
-    reuse_scope: 'session', proxy_mode: 'all', proxy_ids: []
+    reuse_scope: 'account', proxy_mode: 'all', proxy_ids: []
   }
   const raw = extra?.openai_first_serve
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return defaults

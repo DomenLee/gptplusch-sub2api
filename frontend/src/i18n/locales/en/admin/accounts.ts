@@ -638,9 +638,11 @@ export default {
         wsModeShared: 'Shared (shared)',
         wsModeDedicated: 'Dedicated (dedicated)',
         firstServeSettings: {
+          mode: "First serve mode",
+          modeHint: "When enabled, HTTP/streaming conversations on this account share an upstream session ID and proxy by default, rotating on expiry or the first-token threshold.",
           reuseScope: "HTTP combination scope",
-          scopeSession: "One combination per conversation (default)",
-          scopeAccount: "Share a combination across this account",
+          scopeSession: "One combination per conversation",
+          scopeAccount: "Share a combination across this account (default)",
           scopeHint: "Account sharing uses one routing ID and proxy for HTTP requests without requiring client session IDs. Conversation history, conversation IDs and previous_response_id remain independent. WebSocket sessions remain separate.",
           scopeInvalid: "Account {name}: Select conversation or account sharing and save.",
           title: "First serve settings",

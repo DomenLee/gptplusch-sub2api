@@ -1430,7 +1430,7 @@
       </div>
 
       <!-- Temp Unschedulable Rules -->
-      <div class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
+      <div data-testid="temp-unschedulable-settings" class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
         <div class="mb-3 flex items-center justify-between">
           <div>
             <label class="input-label mb-0">{{ t('admin.accounts.tempUnschedulable.title') }}</label>
@@ -1577,6 +1577,20 @@
         </div>
       </div>
 
+      <FirstServeSettings
+        v-if="show && account?.platform === 'openai' && (account.type === 'oauth' || account.type === 'setup-token' || account.type === 'apikey')"
+        :key="account.id"
+        ref="firstServeSettings"
+        v-model="firstServeConfig"
+        v-model:enabled="firstServeEnabled"
+        :proxy-group-id="form.proxy_group_id"
+        :account-name="form.name"
+        :proxies="proxies"
+        :proxy-groups="proxyGroups"
+        @update:proxy-group-id="form.proxy_group_id = $event; form.proxy_id = null"
+      >
+        <FirstServeStatus :account-id="account.id" :account-name="account.name" />
+      </FirstServeSettings>
 
       <div
         v-if="supportsAccountSchedulingThresholdOverride"
@@ -1869,7 +1883,7 @@
 
       <!-- OpenAI WS Mode 三态（off/ctx_pool/passthrough） -->
       <div
-        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
+        v-if="!firstServeEnabled && account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between">
@@ -1887,19 +1901,6 @@
           </div>
         </div>
       </div>
-
-      <FirstServeSettings
-        v-if="show && account?.platform === 'openai' && openaiResponsesWebSocketV2Mode === OPENAI_WS_MODE_FIRST_SERVE"
-        ref="firstServeSettings"
-        v-model="firstServeConfig"
-        :proxy-group-id="form.proxy_group_id"
-        :account-name="form.name"
-        :proxies="proxies"
-        :proxy-groups="proxyGroups"
-        @update:proxy-group-id="form.proxy_group_id = $event; form.proxy_id = null"
-      >
-        <FirstServeStatus :account-id="account.id" :account-name="account.name" />
-      </FirstServeSettings>
 
       <!-- OpenAI APIKey Responses API support mode -->
       <div
@@ -3765,13 +3766,13 @@ const codexFingerprintModeOptions = computed(() => [
   { value: 'full' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintFull') },
 ])
 
+const firstServeEnabled = ref(false)
 const firstServeConfig = ref(readFirstServeConfig())
 const firstServeSettings = ref<InstanceType<typeof FirstServeSettings>>()
 
 const openAIWSModeOptions = computed(() => [
   { value: OPENAI_WS_MODE_OFF, label: t('admin.accounts.openai.wsModeOff') },
   { value: OPENAI_WS_MODE_CTX_POOL, label: t('admin.accounts.openai.wsModeCtxPool') },
-  { value: OPENAI_WS_MODE_FIRST_SERVE, label: t('admin.accounts.openai.wsModeFirstServe') },
   { value: OPENAI_WS_MODE_PASSTHROUGH, label: t('admin.accounts.openai.wsModePassthrough') },
   { value: OPENAI_WS_MODE_HTTP_BRIDGE, label: t('admin.accounts.openai.wsModeHttpBridge') }
 ])
@@ -4185,6 +4186,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   mixedScheduling.value = false
   allowOverages.value = false
 	const extra = newAccount.extra as Record<string, unknown> | undefined
+  firstServeEnabled.value = false
   firstServeConfig.value = readFirstServeConfig(extra)
 	mixedScheduling.value = extra?.mixed_scheduling === true
 	allowOverages.value = extra?.allow_overages === true
@@ -4263,6 +4265,10 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       fallbackEnabledKeys: ['responses_websockets_v2_enabled', 'openai_ws_enabled'],
       defaultMode: OPENAI_WS_MODE_OFF
     })
+    firstServeEnabled.value = openaiResponsesWebSocketV2Mode.value === OPENAI_WS_MODE_FIRST_SERVE
+    if (firstServeEnabled.value) {
+      openaiResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_CTX_POOL
+    }
     if (newAccount.type === 'oauth' || newAccount.type === 'setup-token') {
       codexCLIOnlyEnabled.value = extra?.codex_cli_only === true
       codexCLIOnlyAppServerEnabled.value =
@@ -5161,8 +5167,8 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
 
 const handleSubmit = async () => {
   if (!props.account) return
-  if (props.account.platform === 'openai' && openaiResponsesWebSocketV2Mode.value === OPENAI_WS_MODE_FIRST_SERVE && firstServeSettings.value && !firstServeSettings.value.validate()) return
-  if (props.account.platform === 'openai' && openaiResponsesWebSocketV2Mode.value === OPENAI_WS_MODE_FIRST_SERVE && !form.proxy_group_id) {
+  if (props.account.platform === 'openai' && firstServeEnabled.value && firstServeSettings.value && !firstServeSettings.value.validate()) return
+  if (props.account.platform === 'openai' && firstServeEnabled.value && !form.proxy_group_id) {
     appStore.showError(t('admin.accounts.openai.firstServeProxyRequired', { name: form.name }))
     return
   }
@@ -5703,16 +5709,16 @@ const handleSubmit = async () => {
     if (props.account.platform === 'openai' && (props.account.type === 'oauth' || props.account.type === 'setup-token' || props.account.type === 'apikey')) {
       const currentExtra = (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
-      if (openaiResponsesWebSocketV2Mode.value === OPENAI_WS_MODE_FIRST_SERVE) {
+      if (firstServeEnabled.value) {
         newExtra.openai_first_serve = { ...firstServeConfig.value, proxy_ids: [...firstServeConfig.value.proxy_ids] }
       }
       const hadCodexCLIOnlyEnabled = currentExtra.codex_cli_only === true
       if (props.account.type === 'oauth' || props.account.type === 'setup-token') {
-        newExtra.openai_oauth_responses_websockets_v2_mode = openaiOAuthResponsesWebSocketV2Mode.value
-        newExtra.openai_oauth_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiOAuthResponsesWebSocketV2Mode.value)
+        newExtra.openai_oauth_responses_websockets_v2_mode = firstServeEnabled.value ? OPENAI_WS_MODE_FIRST_SERVE : openaiOAuthResponsesWebSocketV2Mode.value
+        newExtra.openai_oauth_responses_websockets_v2_enabled = firstServeEnabled.value || isOpenAIWSModeEnabled(openaiOAuthResponsesWebSocketV2Mode.value)
       } else if (props.account.type === 'apikey') {
-        newExtra.openai_apikey_responses_websockets_v2_mode = openaiAPIKeyResponsesWebSocketV2Mode.value
-        newExtra.openai_apikey_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiAPIKeyResponsesWebSocketV2Mode.value)
+        newExtra.openai_apikey_responses_websockets_v2_mode = firstServeEnabled.value ? OPENAI_WS_MODE_FIRST_SERVE : openaiAPIKeyResponsesWebSocketV2Mode.value
+        newExtra.openai_apikey_responses_websockets_v2_enabled = firstServeEnabled.value || isOpenAIWSModeEnabled(openaiAPIKeyResponsesWebSocketV2Mode.value)
       }
       delete newExtra.responses_websockets_v2_enabled
       delete newExtra.openai_ws_enabled

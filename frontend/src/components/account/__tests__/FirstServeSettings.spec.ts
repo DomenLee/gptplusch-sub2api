@@ -12,7 +12,8 @@ const proxies = [1, 2, 3].map(id => ({ id, name: `Proxy ${id}`, host: `proxy-${i
 
 function render(config = readFirstServeConfig()) {
   const wrapper = mount(FirstServeSettings, {
-    props: { modelValue: config, proxyGroupId: 10, accountName: 'Account A', proxyGroups: groups, proxies,
+    props: { enabled: true, modelValue: config, proxyGroupId: 10, accountName: 'Account A', proxyGroups: groups, proxies,
+      'onUpdate:enabled': (value: boolean) => { void wrapper.setProps({ enabled: value }) },
       'onUpdate:modelValue': (value: FirstServeConfig) => { void wrapper.setProps({ modelValue: value }) },
       'onUpdate:proxyGroupId': (value: number | null) => { void wrapper.setProps({ proxyGroupId: value }) }
     }
@@ -21,6 +22,40 @@ function render(config = readFirstServeConfig()) {
 }
 
 describe('FirstServeSettings', () => {
+  it('defaults to account sharing while preserving an explicitly saved conversation scope', () => {
+    expect(readFirstServeConfig().reuse_scope).toBe('account')
+    expect(readFirstServeConfig({ openai_first_serve: { ttl_minutes: 12 } }).reuse_scope).toBe('account')
+    expect(readFirstServeConfig({ openai_first_serve: { reuse_scope: 'session' } }).reuse_scope).toBe('session')
+  })
+
+  it('keeps configuration collapsed and preserves it when the switch is turned off and back on', async () => {
+    const wrapper = render()
+    expect(wrapper.get('[role="switch"]').attributes('aria-checked')).toBe('true')
+    expect((wrapper.get('[data-testid="first-serve-config"]').element as HTMLDetailsElement).open).toBe(false)
+    await wrapper.get('[data-testid="first-serve-ttl_minutes"]').setValue('12')
+    await wrapper.get('[role="switch"]').trigger('click')
+    expect(wrapper.find('[data-testid="first-serve-config"]').exists()).toBe(false)
+    expect(wrapper.vm.validate()).toBe(true)
+    await wrapper.get('[role="switch"]').trigger('click')
+    expect((wrapper.get('[data-testid="first-serve-config"]').element as HTMLDetailsElement).open).toBe(false)
+    expect(wrapper.props('modelValue').ttl_minutes).toBe(12)
+    wrapper.unmount()
+  })
+
+  it('opens collapsed fields for validation failures and native invalid events', async () => {
+    const wrapper = render({ ...readFirstServeConfig(), cooldown_seconds: 0 })
+    expect(wrapper.vm.validate()).toBe(false)
+    expect((wrapper.get('[data-testid="first-serve-config"]').element as HTMLDetailsElement).open).toBe(true)
+    expect(wrapper.get('[role="alert"]').text()).toContain('Account A')
+    await wrapper.setProps({ enabled: false })
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    await wrapper.setProps({ enabled: true })
+    await wrapper.get('[data-testid="first-serve-cooldown_seconds"]').trigger('invalid')
+    expect((wrapper.get('[data-testid="first-serve-config"]').element as HTMLDetailsElement).open).toBe(true)
+    expect((wrapper.findAll('details')[1].element as HTMLDetailsElement).open).toBe(true)
+    wrapper.unmount()
+  })
+
   it('limits proxy choices to the bound group, displays exit IPs without credentials, and requires explicit selection', async () => {
     const wrapper = render()
     await wrapper.get('[data-testid="first-serve-proxy-mode"]').setValue('selected')

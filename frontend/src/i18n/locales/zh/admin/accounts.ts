@@ -755,9 +755,11 @@ export default {
         wsModeShared: '共享（shared）',
         wsModeDedicated: '独享（dedicated）',
         firstServeSettings: {
+          mode: "首服模式",
+          modeHint: "开启后，默认同账号所有 HTTP/流式会话共用上游会话 ID 与代理；按配置时长或首 token 阈值切换。",
           reuseScope: "HTTP 组合复用范围",
-          scopeSession: "按会话独立复用（默认）",
-          scopeAccount: "同账号所有会话共享组合",
+          scopeSession: "按会话独立复用",
+          scopeAccount: "同账号所有会话共享组合（默认）",
           scopeHint: "账号共享时，HTTP 请求共用路由 ID 和代理，无需客户端提供会话标识；对话历史、对话标识和 previous_response_id 仍独立。WebSocket 保持独立会话。",
           scopeInvalid: "账号 {name}：请选择按会话复用或同账号共享组合后保存。",
           title: "首服模式配置",

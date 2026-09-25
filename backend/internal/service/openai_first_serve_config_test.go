@@ -60,6 +60,21 @@ func TestFirstServeConfigValidation(t *testing.T) {
 	require.NotEqual(t, cfg.key(1), cfg.key(2), "changing groups isolates old connections")
 }
 
+func TestFirstServeConfigDefaultsToAccountSharing(t *testing.T) {
+	for _, tc := range []struct {
+		extra map[string]any
+		want  string
+	}{
+		{want: "account"},
+		{extra: map[string]any{"openai_first_serve": map[string]any{"ttl_minutes": 12}}, want: "account"},
+		{extra: map[string]any{"openai_first_serve": map[string]any{"reuse_scope": "session"}}, want: "session"},
+	} {
+		cfg, err := (&Account{Extra: tc.extra}).firstServeConfig()
+		require.NoError(t, err)
+		require.Equal(t, tc.want, cfg.ReuseScope)
+	}
+}
+
 type firstServeConfigRepo struct {
 	proxyGroupServiceRepoStub
 	groupID, previousID int64

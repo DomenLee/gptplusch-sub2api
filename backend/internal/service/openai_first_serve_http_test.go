@@ -31,7 +31,8 @@ func firstServeHTTPAccount(t *testing.T) *Account {
 	group := int64(9)
 	return &Account{ID: 98710, Name: "HTTP test", Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
 		ProxyGroupID: &group, Concurrency: 1, Credentials: map[string]any{"api_key": "test-key"},
-		Extra: map[string]any{"openai_apikey_responses_websockets_v2_mode": OpenAIWSIngressModeFirstServe},
+		Extra: map[string]any{"openai_apikey_responses_websockets_v2_mode": OpenAIWSIngressModeFirstServe,
+			"openai_first_serve": map[string]any{"reuse_scope": "session"}},
 	}
 }
 
@@ -351,7 +352,7 @@ func TestFirstServeHTTPRequestPreservesContinuationAndNonTarget(t *testing.T) {
 
 func TestFirstServeHTTPAccountSharingKeepsConversationsSeparate(t *testing.T) {
 	a := firstServeHTTPAccount(t)
-	a.Extra["openai_first_serve"] = map[string]any{"reuse_scope": "account"}
+	delete(a.Extra, "openai_first_serve") // account sharing is the default even without stored settings
 	svc := &OpenAIGatewayService{}
 	body := []byte(`{"stream":true,"previous_response_id":"resp_own","input":[{"type":"function_call_output","call_id":"call_own","output":"private"}],"client_metadata":{"thread_id":"client-thread","session_id":"client-session"}}`)
 	var leases []*openAIFirstServeHTTPLease

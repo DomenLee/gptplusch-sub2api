@@ -12,7 +12,7 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
-// Stored in accounts.extra; omitted settings keep the original first-serve defaults.
+// Stored in accounts.extra; omitted reuse scope shares the account HTTP combination.
 type OpenAIFirstServeConfig struct {
 	ReuseScope      string  `json:"reuse_scope"`
 	TTLMinutes      int     `json:"ttl_minutes"`
@@ -24,7 +24,7 @@ type OpenAIFirstServeConfig struct {
 }
 
 func defaultOpenAIFirstServeConfig() OpenAIFirstServeConfig {
-	return OpenAIFirstServeConfig{ReuseScope: "session", TTLMinutes: 30, TTFTSeconds: 15, MaxSwitches: 3, CooldownSeconds: 60, ProxyMode: "all", ProxyIDs: []int64{}}
+	return OpenAIFirstServeConfig{ReuseScope: "account", TTLMinutes: 30, TTFTSeconds: 15, MaxSwitches: 3, CooldownSeconds: 60, ProxyMode: "all", ProxyIDs: []int64{}}
 }
 
 func (a *Account) firstServeConfig() (OpenAIFirstServeConfig, error) {

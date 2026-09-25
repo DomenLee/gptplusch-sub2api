@@ -2439,7 +2439,7 @@
       </div>
 
       <!-- Temp Unschedulable Rules -->
-      <div class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
+      <div data-testid="temp-unschedulable-settings" class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
         <div class="mb-3 flex items-center justify-between">
           <div>
             <label class="input-label mb-0">{{ t('admin.accounts.tempUnschedulable.title') }}</label>
@@ -2585,6 +2585,18 @@
           </button>
         </div>
       </div>
+
+      <FirstServeSettings
+        v-if="show && form.platform === 'openai' && (accountCategory === 'oauth-based' || accountCategory === 'apikey')"
+        ref="firstServeSettings"
+        v-model="firstServeConfig"
+        v-model:enabled="firstServeEnabled"
+        :proxy-group-id="form.proxy_group_id"
+        :account-name="form.name"
+        :proxies="proxies"
+        :proxy-groups="proxyGroups"
+        @update:proxy-group-id="form.proxy_group_id = $event; form.proxy_id = null"
+      />
 
       <!-- Intercept Warmup Requests (Anthropic/Antigravity) -->
       <div
@@ -3129,7 +3141,7 @@
 
       <!-- OpenAI WS Mode 三态（off/ctx_pool/passthrough） -->
       <div
-        v-if="form.platform === 'openai' && (accountCategory === 'oauth-based' || accountCategory === 'apikey')"
+        v-if="!firstServeEnabled && form.platform === 'openai' && (accountCategory === 'oauth-based' || accountCategory === 'apikey')"
         data-testid="create-openai-ws-mode"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
@@ -3148,17 +3160,6 @@
           </div>
         </div>
       </div>
-
-      <FirstServeSettings
-        v-if="show && form.platform === 'openai' && openaiResponsesWebSocketV2Mode === OPENAI_WS_MODE_FIRST_SERVE"
-        ref="firstServeSettings"
-        v-model="firstServeConfig"
-        :proxy-group-id="form.proxy_group_id"
-        :account-name="form.name"
-        :proxies="proxies"
-        :proxy-groups="proxyGroups"
-        @update:proxy-group-id="form.proxy_group_id = $event; form.proxy_id = null"
-      />
 
       <!-- Anthropic API Key 自动透传开关 -->
       <div
@@ -4656,13 +4657,13 @@ const geminiSelectedTier = computed(() => {
   }
 })
 
+const firstServeEnabled = ref(false)
 const firstServeConfig = ref(readFirstServeConfig())
 const firstServeSettings = ref<InstanceType<typeof FirstServeSettings>>()
 
 const openAIWSModeOptions = computed(() => [
   { value: OPENAI_WS_MODE_OFF, label: t('admin.accounts.openai.wsModeOff') },
   { value: OPENAI_WS_MODE_CTX_POOL, label: t('admin.accounts.openai.wsModeCtxPool') },
-  { value: OPENAI_WS_MODE_FIRST_SERVE, label: t('admin.accounts.openai.wsModeFirstServe') },
   { value: OPENAI_WS_MODE_PASSTHROUGH, label: t('admin.accounts.openai.wsModePassthrough') },
   { value: OPENAI_WS_MODE_HTTP_BRIDGE, label: t('admin.accounts.openai.wsModeHttpBridge') }
 ])
@@ -5323,6 +5324,7 @@ const submitCreateAccount = async (payload: CreateAccountRequest) => {
 
 // Methods
 const resetForm = () => {
+  firstServeEnabled.value = false
   firstServeConfig.value = readFirstServeConfig()
   step.value = 1
   form.name = ''
@@ -5453,15 +5455,15 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
   }
 
   const extra: Record<string, unknown> = { ...(base || {}) }
-  if (openaiResponsesWebSocketV2Mode.value === OPENAI_WS_MODE_FIRST_SERVE) {
+  if (firstServeEnabled.value) {
     extra.openai_first_serve = { ...firstServeConfig.value, proxy_ids: [...firstServeConfig.value.proxy_ids] }
   }
   if (accountCategory.value === 'oauth-based') {
-    extra.openai_oauth_responses_websockets_v2_mode = openaiOAuthResponsesWebSocketV2Mode.value
-    extra.openai_oauth_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiOAuthResponsesWebSocketV2Mode.value)
+    extra.openai_oauth_responses_websockets_v2_mode = firstServeEnabled.value ? OPENAI_WS_MODE_FIRST_SERVE : openaiOAuthResponsesWebSocketV2Mode.value
+    extra.openai_oauth_responses_websockets_v2_enabled = firstServeEnabled.value || isOpenAIWSModeEnabled(openaiOAuthResponsesWebSocketV2Mode.value)
   } else if (accountCategory.value === 'apikey') {
-    extra.openai_apikey_responses_websockets_v2_mode = openaiAPIKeyResponsesWebSocketV2Mode.value
-    extra.openai_apikey_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiAPIKeyResponsesWebSocketV2Mode.value)
+    extra.openai_apikey_responses_websockets_v2_mode = firstServeEnabled.value ? OPENAI_WS_MODE_FIRST_SERVE : openaiAPIKeyResponsesWebSocketV2Mode.value
+    extra.openai_apikey_responses_websockets_v2_enabled = firstServeEnabled.value || isOpenAIWSModeEnabled(openaiAPIKeyResponsesWebSocketV2Mode.value)
   }
   // 清理兼容旧键，统一改用分类型开关。
   delete extra.responses_websockets_v2_enabled
@@ -5654,8 +5656,8 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
 }
 
 const handleSubmit = async () => {
-  if (form.platform === 'openai' && openaiResponsesWebSocketV2Mode.value === OPENAI_WS_MODE_FIRST_SERVE && firstServeSettings.value && !firstServeSettings.value.validate()) return
-  if (form.platform === 'openai' && openaiResponsesWebSocketV2Mode.value === OPENAI_WS_MODE_FIRST_SERVE && !form.proxy_group_id) {
+  if (form.platform === 'openai' && firstServeEnabled.value && firstServeSettings.value && !firstServeSettings.value.validate()) return
+  if (form.platform === 'openai' && firstServeEnabled.value && !form.proxy_group_id) {
     appStore.showError(t('admin.accounts.openai.firstServeProxyRequired', { name: form.name }))
     return
   }
