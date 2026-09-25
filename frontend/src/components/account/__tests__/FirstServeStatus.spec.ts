@@ -9,6 +9,23 @@ vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string, params?: Record<
 afterEach(() => { vi.clearAllMocks(); vi.useRealTimers() })
 
 describe('FirstServeStatus', () => {
+  it.each(['non_stream', 'compact'] as const)('hides %s request summaries and legacy status rows', async (kind) => {
+    const base = {
+      account_id: 1, proxy_id: 2, proxy_name: 'Hidden proxy', conn_id: 'hidden-route',
+      transport: 'http' as const, expires_at: '2026-09-25T10:30:00Z', updated_at: '2026-09-25T10:10:00Z',
+      first_token_ms: null, rotations: 0, active: true
+    }
+    vi.mocked(getFirstServeStatus).mockResolvedValue([
+      { ...base, id: 'summary', reason: 'ready', last_request: { kind, outcome: kind, duration_ms: 100, input_tokens: 10, output_tokens: 1 } },
+      { ...base, id: 'legacy', reason: kind }
+    ])
+    const wrapper = mount(FirstServeStatus, { props: { accountId: 1, accountName: 'Account A' } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('firstServeEmpty')
+    expect(wrapper.text()).not.toContain('Hidden proxy')
+    wrapper.unmount()
+  })
+
   it('shows the failed account and retry action, then clears the error after refresh', async () => {
     vi.mocked(getFirstServeStatus).mockRejectedValueOnce(new Error('unavailable')).mockResolvedValue([])
     const wrapper = mount(FirstServeStatus, { props: { accountId: 1, accountName: 'Account A' } })
@@ -45,9 +62,9 @@ describe('FirstServeStatus', () => {
       id: 'shared', account_id: 1, proxy_id: 2, proxy_name: 'Proxy B', conn_id: 'route-1',
       transport: 'http', requests: 8, session_missing: false,
       expires_at: '2026-09-25T10:30:00Z', updated_at: '2026-09-25T10:10:00Z',
-      first_token_ms: null, rotations: 0, reason: 'non_stream', active: true,
+      first_token_ms: null, rotations: 0, reason: 'ttft_unavailable', active: true,
       config: { reuse_scope: 'account', ttl_minutes: 30, ttft_seconds: 15, max_switches: 3, cooldown_seconds: 60, proxy_mode: 'all', proxy_ids: [] },
-      last_request: { kind: 'non_stream', outcome: 'non_stream', input_tokens: 100, output_tokens: 42, duration_ms: 3210, request_id: 'req-42' }
+      last_request: { kind: 'stream', outcome: 'ttft_unavailable', input_tokens: 100, output_tokens: 42, duration_ms: 3210, request_id: 'req-42' }
     }])
     const wrapper = mount(FirstServeStatus, { props: { accountId: 1, accountName: 'Account A' } })
     await flushPromises()

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -95,6 +96,7 @@ type openAIFirstServeState struct {
 	scope       string
 	status      OpenAIFirstServeStatus
 	proxy       *Proxy
+	uses        *atomic.Uint64 // per combination; leases retain it across rotations
 	pending     bool
 	retryAt     time.Time
 	attempts    int
@@ -120,6 +122,10 @@ func (s *openAIFirstServeState) publish(reason string, now time.Time) {
 	s.status.UpdatedAt = now
 	openAIFirstServeStatuses.Lock()
 	defer openAIFirstServeStatuses.Unlock()
+	if s.status.Requests == 0 {
+		delete(openAIFirstServeStatuses.items, s.status.ID)
+		return
+	}
 	if len(openAIFirstServeStatuses.items) >= 4096 {
 		oldestID := ""
 		oldest := now
@@ -135,6 +141,7 @@ func (s *openAIFirstServeState) publish(reason string, now time.Time) {
 
 func (s *openAIFirstServeState) bind(proxy *Proxy, connID string, now time.Time) {
 	s.proxy = proxy
+	s.uses = &atomic.Uint64{}
 	s.status.ConnID = connID
 	s.status.Active = true
 	s.status.ExpiresAt = now.Add(s.status.Config.ttl())

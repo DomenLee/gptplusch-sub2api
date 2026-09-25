@@ -206,7 +206,11 @@ func TestFirstServeIngressRotation(t *testing.T) {
 				account.Extra["openai_first_serve"] = map[string]any{"ttl_minutes": 12, "ttft_seconds": 1, "proxy_mode": "selected", "proxy_ids": []int64{101, 102}}
 			}
 			svc := &OpenAIGatewayService{cfg: cfg, openaiWSPool: pool, cache: &stubGatewayCache{}, toolCorrector: NewCodexToolCorrector(), openaiWSResolver: NewOpenAIWSProtocolResolver(cfg)}
-			hooks := &OpenAIWSIngressHooks{AfterTurn: func(turn int, _ *OpenAIForwardResult, _ error) {
+			var reused []bool
+			hooks := &OpenAIWSIngressHooks{AfterTurn: func(turn int, result *OpenAIForwardResult, _ error) {
+				if result != nil {
+					reused = append(reused, result.FirstServeActive)
+				}
 				if turn != 1 || !tc.expire {
 					return
 				}
@@ -266,6 +270,7 @@ func TestFirstServeIngressRotation(t *testing.T) {
 			require.NoError(t, err)
 			_ = client.CloseNow()
 			require.NoError(t, <-errCh)
+			require.Equal(t, []bool{false, !tc.wantRotation}, reused)
 			dialer.mu.Lock()
 			proxies := append([]string(nil), dialer.proxies...)
 			dialer.mu.Unlock()

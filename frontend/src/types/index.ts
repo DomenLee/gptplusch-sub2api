@@ -1793,6 +1793,7 @@ export interface UsageLog {
   stream: boolean
   openai_ws_mode?: boolean
   native_compaction_v2: boolean
+  first_serve_active?: boolean
   duration_ms: number | null
   first_token_ms: number | null
 

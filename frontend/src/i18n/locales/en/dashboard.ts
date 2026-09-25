@@ -398,6 +398,8 @@ export default {
     stream: 'Stream',
     sync: 'Sync',
     nativeCompactionV2: 'Compaction',
+    firstServeActive: 'First serve active',
+    firstServeActiveHint: 'This streaming request reused a first-serve upstream ID and proxy combination. The badge reflects the state when the request was made.',
     compactionFilter: 'Request Kind',
     allCompactionTypes: 'All Requests',
     compactionOnly: 'Compaction Only',

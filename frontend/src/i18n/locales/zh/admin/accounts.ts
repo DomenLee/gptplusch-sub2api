@@ -787,7 +787,7 @@ export default {
         },
         firstServeShared: "同账号共享路由 ID + 代理",
         firstServeSeparate: "按会话独立组合",
-        firstServeRequests: "本组合已使用 {count} 次",
+        firstServeRequests: "本组合已接收 {count} 次流式请求",
         firstServeUsage: "最近完成请求：输入 {input} / 输出 {output} token · 总耗时 {duration} 秒",
         firstServeRequestId: "上游请求 ID：{id}",
         firstServeInactive: "组合已到期或不再复用",

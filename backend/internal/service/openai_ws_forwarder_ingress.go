@@ -1046,6 +1046,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		imageCounter := newOpenAIImageOutputCounter()
 		var firstTokenMs *int
 		reqStream := openAIWSPayloadBoolFromRaw(payload, "stream", true)
+		firstServeStream := reqStream && !isExplicitOpenAICompactRequest(c, payload) && !isOpenAINativeCompactionV2(c)
+		if firstServe != nil && firstServeStream {
+			firstServe.status.Requests++
+			firstServe.publish(firstServe.status.Reason, time.Now())
+		}
 		turnPreviousResponseID := openAIWSPayloadStringFromRaw(payload, "previous_response_id")
 		turnPreviousResponseIDKind := ClassifyOpenAIPreviousResponseIDKind(turnPreviousResponseID)
 		turnPromptCacheKey := openAIWSPayloadStringFromRaw(payload, "prompt_cache_key")
@@ -1220,7 +1225,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if firstTokenMs == nil && startsToken {
 				ms := int(time.Since(turnStart).Milliseconds())
 				firstTokenMs = &ms
-				if firstServe != nil {
+				if firstServe != nil && firstServeStream {
 					firstServe.observe(ms, time.Now())
 				}
 			}
@@ -1328,6 +1333,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					result.wsReplayInputExists = true
 				}
 				if firstServe != nil {
+					result.FirstServeActive = firstServe.uses.Add(1) > 1 && firstServeStream
 					output := replayCollector.AllItems()
 					fullOutput := gjson.GetBytes(upstreamMessage, "response.output").IsArray()
 					firstServe.finish(responseID, output, fullOutput && (terminalEvent == "response.completed" || terminalEvent == "response.done"))

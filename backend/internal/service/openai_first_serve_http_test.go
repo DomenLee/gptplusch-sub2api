@@ -113,11 +113,11 @@ func TestFirstServeHTTPUnavailableProxyAndCooldown(t *testing.T) {
 	SetDefaultProxyGroupResolver(firstServeTestResolver{first: &Proxy{ID: 101, Host: "first.test", Port: 8080}})
 	svc := &OpenAIGatewayService{}
 	c := firstServeHTTPContext(1, "session")
-	ctx, _, first, err := svc.prepareFirstServeHTTP(context.Background(), c, a, []byte(`{}`))
+	ctx, _, first, err := svc.prepareFirstServeHTTP(context.Background(), c, a, []byte(`{"stream":true}`))
 	require.NoError(t, err)
 	observeFirstServeHTTP(ctx, 16000)
 	first.finish(nil, nil)
-	_, _, second, err := svc.prepareFirstServeHTTP(context.Background(), c, a, []byte(`{}`))
+	_, _, second, err := svc.prepareFirstServeHTTP(context.Background(), c, a, []byte(`{"stream":true}`))
 	require.NoError(t, err)
 	require.Equal(t, first.id, second.id)
 	require.Equal(t, "proxy_unavailable", second.entry.state.status.Reason)
@@ -125,7 +125,7 @@ func TestFirstServeHTTPUnavailableProxyAndCooldown(t *testing.T) {
 	second.finish(nil, nil)
 	second.entry.state.retryAt = time.Time{}
 	second.entry.state.attempts = second.entry.state.status.Config.MaxSwitches
-	_, _, third, err := svc.prepareFirstServeHTTP(context.Background(), c, a, []byte(`{}`))
+	_, _, third, err := svc.prepareFirstServeHTTP(context.Background(), c, a, []byte(`{"stream":true}`))
 	require.NoError(t, err)
 	require.Equal(t, first.id, third.id)
 	require.Equal(t, "cooldown", third.entry.state.status.Reason)
@@ -141,7 +141,7 @@ func TestFirstServeHTTPConcurrentRequests(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ctx, _, lease, err := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(1, "shared"), a, []byte(`{}`))
+			ctx, _, lease, err := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(1, "shared"), a, []byte(`{"stream":true}`))
 			if err != nil {
 				t.Error(err)
 				return
@@ -305,6 +305,7 @@ func TestFirstServeHTTPForwardStreaming(t *testing.T) {
 				}
 				require.True(t, result.Stream)
 				require.False(t, result.OpenAIWSMode)
+				require.Equal(t, turn == 1, result.FirstServeActive, "only the second request reuses the combination; rotation resets it")
 			}
 			require.Equal(t, original, body)
 			require.Equal(t, upstream.proxies[0], upstream.proxies[1])
@@ -324,7 +325,7 @@ func TestFirstServeHTTPForwardStreaming(t *testing.T) {
 func TestFirstServeHTTPRequestPreservesContinuationAndNonTarget(t *testing.T) {
 	a := firstServeHTTPAccount(t)
 	svc := &OpenAIGatewayService{}
-	body := []byte(`{"previous_response_id":"resp_old","input":[{"type":"function_call_output","call_id":"call_1","output":"ok"}],"client_metadata":{"session_id":"old","x-codex-turn-metadata":"{\"session_id\":\"old\",\"thread_id\":\"thread\"}"}}`)
+	body := []byte(`{"stream":true,"previous_response_id":"resp_old","input":[{"type":"function_call_output","call_id":"call_1","output":"ok"}],"client_metadata":{"session_id":"old","x-codex-turn-metadata":"{\"session_id\":\"old\",\"thread_id\":\"thread\"}"}}`)
 	ctx, _, lease, err := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(1, "session"), a, body)
 	require.NoError(t, err)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.openai.com/v1/responses", bytes.NewReader(body))
@@ -430,18 +431,18 @@ func TestFirstServeHTTPReturnedTokensWithoutTTFT(t *testing.T) {
 			require.NoError(t, err)
 			lease.finish(&OpenAIForwardResult{RequestID: "req_test", Usage: OpenAIUsage{InputTokens: 100, OutputTokens: 42}}, nil)
 			status := lease.entry.state.status
-			want := kind
 			if kind == "stream" {
-				want = "ttft_unavailable"
+				require.Equal(t, "ttft_unavailable", status.Reason)
+				require.Equal(t, "stream", status.LastRequest.Kind)
+				require.Equal(t, "req_test", status.LastRequest.RequestID)
+				require.Equal(t, 42, *status.LastRequest.OutputTokens)
+			} else {
+				require.Nil(t, status.LastRequest)
+				require.Zero(t, status.Requests)
+				for _, visible := range GetOpenAIFirstServeStatuses(a.ID) {
+					require.NotEqual(t, status.ID, visible.ID, "non-stream and compact combinations are hidden even after completion")
+				}
 			}
-			wantKind := kind
-			if kind == "native_compact" {
-				want, wantKind = "compact", "compact"
-			}
-			require.Equal(t, want, status.Reason)
-			require.Equal(t, wantKind, status.LastRequest.Kind)
-			require.Equal(t, "req_test", status.LastRequest.RequestID)
-			require.Equal(t, 42, *status.LastRequest.OutputTokens)
 			require.Nil(t, status.FirstTokenMs)
 			require.False(t, lease.entry.state.pending)
 		})
@@ -465,7 +466,9 @@ func TestFirstServeHTTPCompactDoesNotOverwriteHealthyLatency(t *testing.T) {
 	require.Equal(t, "ready", compact.entry.state.status.Reason)
 	require.Equal(t, 500, *compact.entry.state.status.FirstTokenMs)
 	require.False(t, compact.entry.state.pending)
-	require.Equal(t, "compact", compact.entry.state.status.LastRequest.Outcome)
+	require.Equal(t, "stream", compact.entry.state.status.LastRequest.Kind)
+	require.Equal(t, "measured", compact.entry.state.status.LastRequest.Outcome)
+	require.Equal(t, 1, compact.entry.state.status.Requests)
 }
 
 func TestFirstServeHTTPJSONForwardReportsUsageWithoutTTFT(t *testing.T) {
@@ -482,8 +485,92 @@ func TestFirstServeHTTPJSONForwardReportsUsageWithoutTTFT(t *testing.T) {
 		require.Nil(t, result.FirstTokenMs)
 		require.Equal(t, 2, result.Usage.OutputTokens)
 		for _, entry := range svc.openaiFirstServeHTTP.items {
-			require.Equal(t, "non_stream", entry.state.status.Reason)
-			require.Equal(t, 2, *entry.state.status.LastRequest.OutputTokens)
+			require.Nil(t, entry.state.status.LastRequest)
+			require.Zero(t, entry.state.status.Requests)
+			require.False(t, result.FirstServeActive)
 		}
+	}
+}
+
+func TestFirstServeHTTPReuseSnapshotSurvivesConcurrentRotation(t *testing.T) {
+	a := firstServeHTTPAccount(t)
+	svc := &OpenAIGatewayService{}
+	c := firstServeHTTPContext(1, "session")
+	body := []byte(`{"stream":true}`)
+	_, _, first, err := svc.prepareFirstServeHTTP(context.Background(), c, a, body)
+	require.NoError(t, err)
+	_, _, second, err := svc.prepareFirstServeHTTP(context.Background(), c, a, body)
+	require.NoError(t, err)
+	first.use()
+	first.use() // retrying the first request is not a reused conversation
+	firstResult := &OpenAIForwardResult{Stream: true}
+	first.finish(firstResult, nil)
+	require.False(t, firstResult.FirstServeActive)
+	first.entry.state.status.ExpiresAt = time.Now().Add(-time.Second)
+	_, _, fresh, err := svc.prepareFirstServeHTTP(context.Background(), c, a, body)
+	require.NoError(t, err)
+	require.NotEqual(t, first.id, fresh.id)
+	second.use() // already prepared against the old ID and proxy
+	secondResult := &OpenAIForwardResult{Stream: true}
+	second.finish(secondResult, nil)
+	require.True(t, secondResult.FirstServeActive)
+	fresh.use()
+	freshResult := &OpenAIForwardResult{Stream: true}
+	fresh.finish(freshResult, nil)
+	require.False(t, freshResult.FirstServeActive)
+}
+
+func TestFirstServeHTTPConcurrentReuseSnapshot(t *testing.T) {
+	a := firstServeHTTPAccount(t)
+	svc := &OpenAIGatewayService{}
+	var wg sync.WaitGroup
+	active := make(chan bool, 16)
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _, lease, err := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(1, "shared"), a, []byte(`{"stream":true}`))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			lease.use()
+			result := &OpenAIForwardResult{Stream: true}
+			lease.finish(result, nil)
+			active <- result.FirstServeActive
+		}()
+	}
+	wg.Wait()
+	close(active)
+	count := 0
+	for reused := range active {
+		if reused {
+			count++
+		}
+	}
+	require.Equal(t, 15, count, "exactly one request establishes the combination")
+}
+
+func TestFirstServeHTTPHiddenRequestsDoNotReplaceStreamingStatus(t *testing.T) {
+	a := firstServeHTTPAccount(t)
+	svc := &OpenAIGatewayService{}
+	c := firstServeHTTPContext(1, "session")
+	ctx, _, stream, err := svc.prepareFirstServeHTTP(context.Background(), c, a, []byte(`{"stream":true}`))
+	require.NoError(t, err)
+	stream.use()
+	observeFirstServeHTTP(ctx, 500)
+	stream.finish(&OpenAIForwardResult{Stream: true, RequestID: "streaming-request"}, nil)
+	last := stream.entry.state.status.LastRequest
+	for _, body := range []string{`{"stream":false}`, `{"stream":true,"input":[{"type":"compaction_trigger"}]}`} {
+		ctx, _, hidden, err := svc.prepareFirstServeHTTP(context.Background(), c, a, []byte(body))
+		require.NoError(t, err)
+		hidden.use()
+		observeFirstServeHTTP(ctx, 60000)
+		result := &OpenAIForwardResult{RequestID: "hidden-request", Stream: true}
+		hidden.finish(result, nil)
+		require.False(t, result.FirstServeActive)
+		require.Same(t, last, hidden.entry.state.status.LastRequest)
+		require.Equal(t, "ready", hidden.entry.state.status.Reason)
+		require.Equal(t, 1, hidden.entry.state.status.Requests)
 	}
 }

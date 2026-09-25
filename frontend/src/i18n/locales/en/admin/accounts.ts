@@ -670,7 +670,7 @@ export default {
         },
         firstServeShared: "Account-wide routing ID + proxy",
         firstServeSeparate: "Combination per conversation",
-        firstServeRequests: "{count} requests on this combination",
+        firstServeRequests: "{count} streaming requests on this combination",
         firstServeUsage: "Last completed request: {input} input / {output} output tokens · Total {duration}s",
         firstServeRequestId: "Upstream request ID: {id}",
         firstServeInactive: "Combination expired or no longer reused",

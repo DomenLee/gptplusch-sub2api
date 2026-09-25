@@ -403,6 +403,8 @@ export default {
     stream: '流式',
     sync: '同步',
     nativeCompactionV2: '压缩',
+    firstServeActive: '首服生效中',
+    firstServeActiveHint: '本次流式请求实际复用了首服模式的上游 ID 与代理组合。此标识记录请求发生时的状态。',
     compactionFilter: '请求类别',
     allCompactionTypes: '全部请求',
     compactionOnly: '仅原生压缩',

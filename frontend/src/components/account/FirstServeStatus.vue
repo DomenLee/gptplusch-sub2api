@@ -74,7 +74,10 @@ async function load() {
   try {
     const result = await getFirstServeStatus(props.accountId, current.signal)
     if (current.signal.aborted) return
-    rows.value = result
+    rows.value = result.filter(row =>
+      (!row.last_request || row.last_request.kind === 'stream') &&
+      !['non_stream', 'compact'].includes(row.reason)
+    )
     error.value = ''
   } catch {
     if (current.signal.aborted) return

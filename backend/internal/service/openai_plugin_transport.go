@@ -17,6 +17,7 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 	if err := applyFirstServeHTTPRequest(request, account); err != nil {
 		return nil, err
 	}
+	firstServeHTTPLease(request.Context()).use()
 	if s.pluginManager != nil {
 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, proxyURL, account)
 		if handled {

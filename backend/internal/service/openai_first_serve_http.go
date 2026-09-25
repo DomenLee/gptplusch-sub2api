@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
@@ -48,6 +49,9 @@ type openAIFirstServeHTTPLease struct {
 	started        time.Time
 	missing        bool
 	fresh          bool
+	uses           *atomic.Uint64
+	applied        bool // protected by entry.mu
+	reused         bool // protected by entry.mu
 	observed       bool // protected by entry.mu
 }
 
@@ -192,9 +196,12 @@ func (s *OpenAIGatewayService) prepareFirstServeHTTP(ctx context.Context, c *gin
 			}
 		}
 	}
-	state.status.Requests++
+	if kind == "stream" {
+		state.status.Requests++
+	}
 	state.publish(state.status.Reason, now)
 	l.id = state.status.ConnID
+	l.uses = state.uses
 	copyAccount.Proxy, copyAccount.ProxyID, copyAccount.proxyGroupResolved = state.proxy, &state.proxy.ID, true
 	return context.WithValue(ctx, openAIFirstServeHTTPKey{}, l), &copyAccount, l, nil
 }
@@ -203,7 +210,7 @@ func (s *OpenAIGatewayService) prepareFirstServeHTTP(ctx context.Context, c *gin
 // stream can mark the combination before it ends, without interrupting it.
 func observeFirstServeHTTP(ctx context.Context, ms int) {
 	l := firstServeHTTPLease(ctx)
-	if l == nil || l.kind == "compact" {
+	if l == nil || l.kind != "stream" {
 		return
 	}
 	l.entry.mu.Lock()
@@ -215,6 +222,21 @@ func observeFirstServeHTTP(ctx context.Context, ms int) {
 	l.entry.state.observe(ms, time.Now())
 }
 
+// Count each dispatched request once, including internal retries. The counter
+// belongs to the captured combination so concurrent rotations cannot alter it.
+func (l *openAIFirstServeHTTPLease) use() {
+	if l == nil {
+		return
+	}
+	l.entry.mu.Lock()
+	defer l.entry.mu.Unlock()
+	if l.applied {
+		return
+	}
+	l.applied = true
+	l.reused = l.uses.Add(1) > 1
+}
+
 func (l *openAIFirstServeHTTPLease) finish(result *OpenAIForwardResult, err error) {
 	if l == nil {
 		return
@@ -222,9 +244,18 @@ func (l *openAIFirstServeHTTPLease) finish(result *OpenAIForwardResult, err erro
 	defer l.release()
 	l.entry.mu.Lock()
 	defer l.entry.mu.Unlock()
+	if result != nil {
+		result.FirstServeActive = l.kind == "stream" && l.applied && l.reused
+	}
 	state := l.entry.state
 	if state.status.ConnID != l.id {
 		return // an older concurrent response must not overwrite the new combination
+	}
+	if l.kind != "stream" {
+		if err != nil {
+			state.pending = true
+		}
+		return // keep the most recent streaming diagnostics intact
 	}
 	now := time.Now()
 	last := &OpenAIFirstServeRequestStatus{Kind: l.kind, Outcome: "ttft_unavailable", DurationMs: now.Sub(l.started).Milliseconds()}
@@ -238,18 +269,12 @@ func (l *openAIFirstServeHTTPLease) finish(result *OpenAIForwardResult, err erro
 		last.Outcome = "request_failed"
 		state.pending = true
 		state.publish("connection_failed", now)
-	case l.kind == "compact":
-		last.Outcome = "compact"
 	case l.observed:
 		last.Outcome = "measured"
 	case result != nil && result.FirstTokenMs != nil:
 		last.Outcome = "measured"
 		state.observe(*result.FirstTokenMs, now)
-	case l.kind == "non_stream":
-		last.Outcome = "non_stream"
 	}
-	// A JSON/compact success without TTFT must not erase the combination's
-	// measured latency or mark returned output tokens as missing.
 	if state.status.FirstTokenMs == nil && !state.pending {
 		state.status.Reason = last.Outcome
 	}
