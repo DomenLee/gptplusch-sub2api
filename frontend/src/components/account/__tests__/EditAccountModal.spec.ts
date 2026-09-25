@@ -1511,7 +1511,7 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_oauth_responses_websockets_v2_mode).toBe('first_serve')
     expect(updateAccountMock.mock.calls[0]?.[1]?.proxy_group_id).toBe(12)
     const config = updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_first_serve
-    expect(config).toEqual({ ttl_minutes: 45, ttft_seconds: 8, max_switches: 5, cooldown_seconds: 20, proxy_mode: 'all', proxy_ids: [] })
+    expect(config).toEqual({ reuse_scope: 'session', ttl_minutes: 45, ttft_seconds: 8, max_switches: 5, cooldown_seconds: 20, proxy_mode: 'all', proxy_ids: [] })
     await wrapper.setProps({ account: { ...account, extra: { openai_oauth_responses_websockets_v2_mode: 'first_serve', openai_first_serve: config } } })
     expect((wrapper.get('[data-testid="first-serve-ttl_minutes"]').element as HTMLInputElement).value).toBe('45')
     await wrapper.setProps({ account: { ...account, id: 999, extra: { openai_oauth_responses_websockets_v2_mode: 'first_serve' } } })

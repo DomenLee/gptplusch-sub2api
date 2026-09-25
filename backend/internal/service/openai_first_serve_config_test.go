@@ -33,6 +33,7 @@ func TestFirstServeConfigValidation(t *testing.T) {
 	for name, raw := range map[string]any{
 		"object": "bad", "null": nil,
 		"zero":               map[string]any{"ttl_minutes": 0},
+		"invalid_scope":      map[string]any{"reuse_scope": "global"},
 		"negative":           map[string]any{"max_switches": -1},
 		"large":              map[string]any{"cooldown_seconds": 3601},
 		"decimal":            map[string]any{"ttft_seconds": 1.5},

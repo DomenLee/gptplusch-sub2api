@@ -14,6 +14,7 @@ import (
 
 // Stored in accounts.extra; omitted settings keep the original first-serve defaults.
 type OpenAIFirstServeConfig struct {
+	ReuseScope      string  `json:"reuse_scope"`
 	TTLMinutes      int     `json:"ttl_minutes"`
 	TTFTSeconds     int     `json:"ttft_seconds"`
 	MaxSwitches     int     `json:"max_switches"`
@@ -23,7 +24,7 @@ type OpenAIFirstServeConfig struct {
 }
 
 func defaultOpenAIFirstServeConfig() OpenAIFirstServeConfig {
-	return OpenAIFirstServeConfig{TTLMinutes: 30, TTFTSeconds: 15, MaxSwitches: 3, CooldownSeconds: 60, ProxyMode: "all", ProxyIDs: []int64{}}
+	return OpenAIFirstServeConfig{ReuseScope: "session", TTLMinutes: 30, TTFTSeconds: 15, MaxSwitches: 3, CooldownSeconds: 60, ProxyMode: "all", ProxyIDs: []int64{}}
 }
 
 func (a *Account) firstServeConfig() (OpenAIFirstServeConfig, error) {
@@ -68,6 +69,9 @@ func (a *Account) firstServeConfig() (OpenAIFirstServeConfig, error) {
 		if field.value < field.min || field.value > field.max {
 			return invalid(fmt.Sprintf("%s 范围为 %d–%d", field.name, field.min, field.max))
 		}
+	}
+	if cfg.ReuseScope != "session" && cfg.ReuseScope != "account" {
+		return invalid("reuse_scope 必须为 session 或 account")
 	}
 	if cfg.ProxyMode != "all" && cfg.ProxyMode != "selected" {
 		return invalid("proxy_mode 必须为 all 或 selected")

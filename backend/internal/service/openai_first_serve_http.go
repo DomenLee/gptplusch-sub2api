@@ -37,14 +37,18 @@ type openAIFirstServeHTTPEntry struct {
 type openAIFirstServeHTTPKey struct{}
 
 type openAIFirstServeHTTPLease struct {
-	registry  *openAIFirstServeHTTPRegistry
-	entry     *openAIFirstServeHTTPEntry
-	key       string
-	id        string
-	accountID int64
-	missing   bool
-	fresh     bool
-	observed  bool // protected by entry.mu
+	registry       *openAIFirstServeHTTPRegistry
+	entry          *openAIFirstServeHTTPEntry
+	key            string
+	id             string
+	accountID      int64
+	conversationID string
+	shared         bool
+	kind           string
+	started        time.Time
+	missing        bool
+	fresh          bool
+	observed       bool // protected by entry.mu
 }
 
 func firstServeHTTPLease(ctx context.Context) *openAIFirstServeHTTPLease {
@@ -126,13 +130,30 @@ func (s *OpenAIGatewayService) prepareFirstServeHTTP(ctx context.Context, c *gin
 		// chats just because they use the same account/API key or initial prompt.
 		scope = uuid.NewString()
 	}
-	key := fmt.Sprintf("%d:%d:%s:%s", account.ID, getOpenAIGroupIDFromContext(c), scope, cfg.key(*account.ProxyGroupID))
+	groupID := getOpenAIGroupIDFromContext(c)
+	key := fmt.Sprintf("%d:%d:%s:%s", account.ID, groupID, scope, cfg.key(*account.ProxyGroupID))
+	shared := cfg.ReuseScope == "account"
+	if shared {
+		// Only routing affinity and proxy selection are shared. The independent
+		// conversation ID below must not collapse tenants or conversation history.
+		key = fmt.Sprintf("%d:account:%s", account.ID, cfg.key(*account.ProxyGroupID))
+		missing = false
+	}
+	conversationID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("first_serve:%d:%d:%d:%s", account.ID, apiKeyID, groupID, scope))).String()
+	kind := "non_stream"
+	if gjson.GetBytes(body, "stream").Bool() {
+		kind = "stream"
+	}
+	if isExplicitOpenAICompactRequest(c, body) || isOpenAINativeCompactionV2(c) {
+		kind = "compact"
+	}
 	now := time.Now()
 	entry, err := s.openaiFirstServeHTTP.acquire(key, now)
 	if err != nil {
 		return ctx, account, nil, err
 	}
-	l := &openAIFirstServeHTTPLease{registry: &s.openaiFirstServeHTTP, entry: entry, key: key, accountID: account.ID, missing: missing}
+	l := &openAIFirstServeHTTPLease{registry: &s.openaiFirstServeHTTP, entry: entry, key: key, accountID: account.ID, missing: missing,
+		shared: shared, conversationID: conversationID, kind: kind, started: now}
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	if entry.state == nil {
@@ -171,6 +192,7 @@ func (s *OpenAIGatewayService) prepareFirstServeHTTP(ctx context.Context, c *gin
 			}
 		}
 	}
+	state.status.Requests++
 	state.publish(state.status.Reason, now)
 	l.id = state.status.ConnID
 	copyAccount.Proxy, copyAccount.ProxyID, copyAccount.proxyGroupResolved = state.proxy, &state.proxy.ID, true
@@ -181,7 +203,7 @@ func (s *OpenAIGatewayService) prepareFirstServeHTTP(ctx context.Context, c *gin
 // stream can mark the combination before it ends, without interrupting it.
 func observeFirstServeHTTP(ctx context.Context, ms int) {
 	l := firstServeHTTPLease(ctx)
-	if l == nil {
+	if l == nil || l.kind == "compact" {
 		return
 	}
 	l.entry.mu.Lock()
@@ -205,16 +227,34 @@ func (l *openAIFirstServeHTTPLease) finish(result *OpenAIForwardResult, err erro
 		return // an older concurrent response must not overwrite the new combination
 	}
 	now := time.Now()
-	if l.observed {
-		state.publish(state.status.Reason, now)
-	} else if result != nil && result.FirstTokenMs != nil {
-		state.observe(*result.FirstTokenMs, now)
-	} else if err != nil {
+	last := &OpenAIFirstServeRequestStatus{Kind: l.kind, Outcome: "ttft_unavailable", DurationMs: now.Sub(l.started).Milliseconds()}
+	if result != nil {
+		last.RequestID = result.RequestID
+		input, output := result.Usage.InputTokens, result.Usage.OutputTokens
+		last.InputTokens, last.OutputTokens = &input, &output
+	}
+	switch {
+	case err != nil:
+		last.Outcome = "request_failed"
 		state.pending = true
 		state.publish("connection_failed", now)
-	} else if !state.pending {
-		state.publish("no_token", now)
+	case l.kind == "compact":
+		last.Outcome = "compact"
+	case l.observed:
+		last.Outcome = "measured"
+	case result != nil && result.FirstTokenMs != nil:
+		last.Outcome = "measured"
+		state.observe(*result.FirstTokenMs, now)
+	case l.kind == "non_stream":
+		last.Outcome = "non_stream"
 	}
+	// A JSON/compact success without TTFT must not erase the combination's
+	// measured latency or mark returned output tokens as missing.
+	if state.status.FirstTokenMs == nil && !state.pending {
+		state.status.Reason = last.Outcome
+	}
+	state.status.LastRequest = last
+	state.publish(state.status.Reason, now)
 	if l.missing {
 		state.status.Active = false
 		state.publish(state.status.Reason, now)
@@ -231,8 +271,20 @@ func applyFirstServeHTTPRequest(req *http.Request, account *Account) error {
 	for _, key := range []string{"session_id", "session-id", "conversation_id"} {
 		req.Header.Set(key, l.id)
 	}
-	rewriteCodexTurnMetadataFields(req.Header, map[string]any{"session_id": l.id})
-	if l.fresh {
+	metadata := map[string]any{"session_id": l.id}
+	if l.shared {
+		req.Header.Set("conversation_id", l.conversationID)
+		metadata["thread_id"] = l.conversationID
+		metadata["window_id"] = l.conversationID
+		for _, key := range []string{"thread-id", "x-client-request-id", "x-codex-window-id"} {
+			if req.Header.Get(key) != "" {
+				req.Header.Set(key, l.conversationID)
+			}
+		}
+	}
+	rewriteCodexTurnMetadataFields(req.Header, metadata)
+	if l.fresh || l.shared {
+		// A client echo must not pin an account-wide combination to its old route.
 		req.Header.Del("x-codex-turn-state")
 	}
 	if !strings.HasSuffix(strings.TrimRight(req.URL.Path, "/"), "/responses") || req.GetBody == nil {
@@ -257,10 +309,20 @@ func applyFirstServeHTTPRequest(req *http.Request, account *Account) error {
 			return err
 		}
 	}
-	if metadata := gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata"); metadata.Type == gjson.String {
+	if l.shared {
+		for _, field := range []string{"client_metadata.thread_id", "client_metadata.x-codex-window-id"} {
+			if gjson.GetBytes(body, field).Exists() {
+				body, err = sjson.SetBytes(body, field, l.conversationID)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if embedded := gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata"); embedded.Type == gjson.String {
 		headers := http.Header{}
-		headers.Set("x-codex-turn-metadata", metadata.String())
-		rewriteCodexTurnMetadataFields(headers, map[string]any{"session_id": l.id})
+		headers.Set("x-codex-turn-metadata", embedded.String())
+		rewriteCodexTurnMetadataFields(headers, metadata)
 		body, err = sjson.SetBytes(body, "client_metadata.x-codex-turn-metadata", headers.Get("x-codex-turn-metadata"))
 		if err != nil {
 			return err

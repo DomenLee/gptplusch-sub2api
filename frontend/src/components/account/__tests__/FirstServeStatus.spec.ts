@@ -26,7 +26,7 @@ describe('FirstServeStatus', () => {
       id: 'session-1', account_id: 1, proxy_id: 2, proxy_name: 'Proxy B', conn_id: 'conn-1',
       expires_at: '2026-09-24T10:30:00Z', updated_at: '2026-09-24T10:10:00Z',
       first_token_ms: 15001, rotations: 1, reason: 'proxy_unavailable', active: true,
-      config: { ttl_minutes: 12, ttft_seconds: 4, max_switches: 2, cooldown_seconds: 10, proxy_mode: 'all', proxy_ids: [] }
+      config: { reuse_scope: 'session', ttl_minutes: 12, ttft_seconds: 4, max_switches: 2, cooldown_seconds: 10, proxy_mode: 'all', proxy_ids: [] }
     }])
     const wrapper = mount(FirstServeStatus, { props: { accountId: 1, accountName: 'Account A' } })
     await flushPromises()
@@ -38,5 +38,25 @@ describe('FirstServeStatus', () => {
     expect(signal?.aborted).toBe(true)
     await vi.advanceTimersByTimeAsync(20000)
     expect(getFirstServeStatus).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows returned tokens separately from missing TTFT and marks account sharing', async () => {
+    vi.mocked(getFirstServeStatus).mockResolvedValue([{
+      id: 'shared', account_id: 1, proxy_id: 2, proxy_name: 'Proxy B', conn_id: 'route-1',
+      transport: 'http', requests: 8, session_missing: false,
+      expires_at: '2026-09-25T10:30:00Z', updated_at: '2026-09-25T10:10:00Z',
+      first_token_ms: null, rotations: 0, reason: 'non_stream', active: true,
+      config: { reuse_scope: 'account', ttl_minutes: 30, ttft_seconds: 15, max_switches: 3, cooldown_seconds: 60, proxy_mode: 'all', proxy_ids: [] },
+      last_request: { kind: 'non_stream', outcome: 'non_stream', input_tokens: 100, output_tokens: 42, duration_ms: 3210, request_id: 'req-42' }
+    }])
+    const wrapper = mount(FirstServeStatus, { props: { accountId: 1, accountName: 'Account A' } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('firstServeShared')
+    expect(wrapper.text()).toContain('firstServeUsage:100,42,3.21')
+    expect(wrapper.text()).toContain('req-42')
+    expect(wrapper.text()).not.toContain('firstServeSessionMissing')
+    expect(wrapper.text()).not.toContain('no_token')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 })

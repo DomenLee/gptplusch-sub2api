@@ -1132,6 +1132,15 @@ export async function refreshOpenCodeGoUsage(id: number): Promise<OpenCodeGoUsag
 }
 
 export interface FirstServeStatus {
+  requests?: number
+  last_request?: {
+    kind: 'stream' | 'non_stream' | 'compact'
+    outcome: string
+    request_id?: string
+    input_tokens: number | null
+    output_tokens: number | null
+    duration_ms: number
+  }
   transport?: 'http' | 'ws'
   session_missing?: boolean
   id: string

@@ -15,8 +15,8 @@ import (
 
 const openAIFirstServeMaxReplay = 8 << 20
 
-// Configuration is account scoped; context and rotation state belong to one
-// leased connection/conversation. They must never be shared across users.
+// Configuration is account scoped. Conversation history remains local to each
+// WebSocket connection; HTTP routing affinity can be shared explicitly.
 func (a *Account) IsOpenAIFirstServe() bool {
 	return a != nil && a.ResolveOpenAIResponsesWebSocketV2Mode(OpenAIWSIngressModeOff) == OpenAIWSIngressModeFirstServe
 }
@@ -32,21 +32,33 @@ func validateOpenAIFirstServe(account *Account) error {
 	return err
 }
 
+// A request summary contains usage and timing only, never request/response content.
+type OpenAIFirstServeRequestStatus struct {
+	Kind         string `json:"kind"`
+	Outcome      string `json:"outcome"`
+	RequestID    string `json:"request_id,omitempty"`
+	InputTokens  *int   `json:"input_tokens"`
+	OutputTokens *int   `json:"output_tokens"`
+	DurationMs   int64  `json:"duration_ms"`
+}
+
 type OpenAIFirstServeStatus struct {
-	Transport      string                 `json:"transport"`
-	SessionMissing bool                   `json:"session_missing,omitempty"`
-	ID             string                 `json:"id"`
-	AccountID      int64                  `json:"account_id"`
-	ProxyID        int64                  `json:"proxy_id"`
-	ProxyName      string                 `json:"proxy_name"`
-	ConnID         string                 `json:"conn_id"`
-	ExpiresAt      time.Time              `json:"expires_at"`
-	UpdatedAt      time.Time              `json:"updated_at"`
-	FirstTokenMs   *int                   `json:"first_token_ms"`
-	Rotations      int                    `json:"rotations"`
-	Reason         string                 `json:"reason"`
-	Active         bool                   `json:"active"`
-	Config         OpenAIFirstServeConfig `json:"config"`
+	Requests       int                            `json:"requests"`
+	LastRequest    *OpenAIFirstServeRequestStatus `json:"last_request,omitempty"`
+	Transport      string                         `json:"transport"`
+	SessionMissing bool                           `json:"session_missing,omitempty"`
+	ID             string                         `json:"id"`
+	AccountID      int64                          `json:"account_id"`
+	ProxyID        int64                          `json:"proxy_id"`
+	ProxyName      string                         `json:"proxy_name"`
+	ConnID         string                         `json:"conn_id"`
+	ExpiresAt      time.Time                      `json:"expires_at"`
+	UpdatedAt      time.Time                      `json:"updated_at"`
+	FirstTokenMs   *int                           `json:"first_token_ms"`
+	Rotations      int                            `json:"rotations"`
+	Reason         string                         `json:"reason"`
+	Active         bool                           `json:"active"`
+	Config         OpenAIFirstServeConfig         `json:"config"`
 }
 
 // Only diagnostic snapshots are global. No credentials or conversation data
@@ -127,6 +139,8 @@ func (s *openAIFirstServeState) bind(proxy *Proxy, connID string, now time.Time)
 	s.status.Active = true
 	s.status.ExpiresAt = now.Add(s.status.Config.ttl())
 	s.status.FirstTokenMs = nil
+	s.status.Requests = 0
+	s.status.LastRequest = nil
 	if proxy != nil {
 		s.status.ProxyID, s.status.ProxyName = proxy.ID, proxy.Name
 	}

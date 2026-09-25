@@ -254,10 +254,13 @@ func (u *firstServeHTTPUpstream) Do(req *http.Request, proxy string, _ int64, _ 
 }
 
 func TestFirstServeHTTPForwardStreaming(t *testing.T) {
-	for _, path := range []string{"responses", "passthrough", "oauth", "oauth_passthrough", "messages", "chat", "chat_raw"} {
+	for _, path := range []string{"responses", "passthrough", "oauth", "oauth_passthrough", "messages", "chat", "chat_raw", "shared"} {
 		t.Run(path, func(t *testing.T) {
 			a := firstServeHTTPAccount(t)
 			a.Extra["openai_first_serve"] = map[string]any{"ttft_seconds": 1}
+			if path == "shared" {
+				a.Extra["openai_first_serve"] = map[string]any{"ttft_seconds": 1, "reuse_scope": "account"}
+			}
 			if strings.Contains(path, "passthrough") {
 				a.Extra["openai_passthrough"] = true
 			}
@@ -282,6 +285,9 @@ func TestFirstServeHTTPForwardStreaming(t *testing.T) {
 					upstream.delay = 1100 * time.Millisecond
 				}
 				c := firstServeHTTPContext(1, "session")
+				if path == "shared" {
+					c = firstServeHTTPContext(int64(turn+1), "")
+				}
 				var result *OpenAIForwardResult
 				var err error
 				switch path {
@@ -340,4 +346,144 @@ func TestFirstServeHTTPRequestPreservesContinuationAndNonTarget(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, a, same)
 	require.Nil(t, off)
+}
+
+func TestFirstServeHTTPAccountSharingKeepsConversationsSeparate(t *testing.T) {
+	a := firstServeHTTPAccount(t)
+	a.Extra["openai_first_serve"] = map[string]any{"reuse_scope": "account"}
+	svc := &OpenAIGatewayService{}
+	body := []byte(`{"stream":true,"previous_response_id":"resp_own","input":[{"type":"function_call_output","call_id":"call_own","output":"private"}],"client_metadata":{"thread_id":"client-thread","session_id":"client-session"}}`)
+	var leases []*openAIFirstServeHTTPLease
+	var accounts []*Account
+	var requests []*http.Request
+	for _, client := range []struct {
+		key     int64
+		session string
+	}{{1, "a"}, {2, "b"}, {3, ""}, {1, "a"}} {
+		ctx, selected, lease, err := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(client.key, client.session), a, []byte(`{"stream":true}`))
+		require.NoError(t, err)
+		require.False(t, lease.missing)
+		require.True(t, lease.shared)
+		if len(leases) > 0 {
+			require.Equal(t, leases[0].id, lease.id, "all clients of this account use the same routing ID")
+			require.Equal(t, accounts[0].ProxyID, selected.ProxyID)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.openai.com/v1/responses", bytes.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("thread-id", "converged-thread")
+		req.Header.Set("x-codex-turn-state", "old-route")
+		require.NoError(t, applyFirstServeHTTPRequest(req, selected))
+		rewritten, err := io.ReadAll(req.Body)
+		require.NoError(t, err)
+		_ = req.Body.Close()
+		require.Equal(t, lease.id, req.Header.Get("session_id"))
+		require.Equal(t, lease.id, gjson.GetBytes(rewritten, "prompt_cache_key").String())
+		require.Empty(t, req.Header.Get("x-codex-turn-state"))
+		require.Equal(t, lease.conversationID, req.Header.Get("conversation_id"))
+		require.Equal(t, lease.conversationID, req.Header.Get("thread-id"))
+		require.Equal(t, lease.conversationID, gjson.GetBytes(rewritten, "client_metadata.thread_id").String())
+		require.Equal(t, "resp_own", gjson.GetBytes(rewritten, "previous_response_id").String())
+		require.JSONEq(t, gjson.GetBytes(body, "input").Raw, gjson.GetBytes(rewritten, "input").Raw)
+		requests = append(requests, req)
+		accounts = append(accounts, selected)
+		leases = append(leases, lease)
+		lease.finish(&OpenAIForwardResult{Stream: true, Usage: OpenAIUsage{OutputTokens: 7}}, nil)
+	}
+	require.NotEqual(t, requests[0].Header.Get("conversation_id"), requests[1].Header.Get("conversation_id"))
+	require.NotEqual(t, requests[1].Header.Get("conversation_id"), requests[2].Header.Get("conversation_id"))
+	require.Equal(t, requests[0].Header.Get("conversation_id"), requests[3].Header.Get("conversation_id"))
+	require.Len(t, svc.openaiFirstServeHTTP.items, 1)
+	require.Equal(t, 4, leases[0].entry.state.status.Requests)
+	require.True(t, leases[0].entry.state.status.Active)
+	other := *a
+	other.ID++
+	_, _, separate, err := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(1, "a"), &other, []byte(`{"stream":true}`))
+	require.NoError(t, err)
+	require.NotEqual(t, leases[0].id, separate.id, "sharing never crosses upstream accounts")
+	separate.finish(nil, nil)
+	leases[0].entry.state.pending = true
+	_, rotatedAccount, rotated, err := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(4, "new-client"), a, []byte(`{"stream":true}`))
+	require.NoError(t, err)
+	require.NotEqual(t, leases[0].id, rotated.id)
+	require.NotEqual(t, accounts[0].ProxyID, rotatedAccount.ProxyID)
+	require.Equal(t, 1, rotated.entry.state.status.Requests)
+	rotated.finish(nil, nil)
+}
+
+func TestFirstServeHTTPReturnedTokensWithoutTTFT(t *testing.T) {
+	for _, kind := range []string{"non_stream", "compact", "native_compact", "stream"} {
+		t.Run(kind, func(t *testing.T) {
+			a := firstServeHTTPAccount(t)
+			svc := &OpenAIGatewayService{}
+			c := firstServeHTTPContext(1, "session")
+			body := []byte(`{}`)
+			if kind == "stream" {
+				body = []byte(`{"stream":true}`)
+			}
+			if kind == "compact" {
+				c.Request.URL.Path = "/v1/responses/compact"
+			}
+			if kind == "native_compact" {
+				body = []byte(`{"stream":true,"input":[{"type":"compaction_trigger"}]}`)
+			}
+			_, _, lease, err := svc.prepareFirstServeHTTP(context.Background(), c, a, body)
+			require.NoError(t, err)
+			lease.finish(&OpenAIForwardResult{RequestID: "req_test", Usage: OpenAIUsage{InputTokens: 100, OutputTokens: 42}}, nil)
+			status := lease.entry.state.status
+			want := kind
+			if kind == "stream" {
+				want = "ttft_unavailable"
+			}
+			wantKind := kind
+			if kind == "native_compact" {
+				want, wantKind = "compact", "compact"
+			}
+			require.Equal(t, want, status.Reason)
+			require.Equal(t, wantKind, status.LastRequest.Kind)
+			require.Equal(t, "req_test", status.LastRequest.RequestID)
+			require.Equal(t, 42, *status.LastRequest.OutputTokens)
+			require.Nil(t, status.FirstTokenMs)
+			require.False(t, lease.entry.state.pending)
+		})
+	}
+}
+
+func TestFirstServeHTTPCompactDoesNotOverwriteHealthyLatency(t *testing.T) {
+	a := firstServeHTTPAccount(t)
+	svc := &OpenAIGatewayService{}
+	c := firstServeHTTPContext(1, "session")
+	ctx, _, first, err := svc.prepareFirstServeHTTP(context.Background(), c, a, []byte(`{"stream":true}`))
+	require.NoError(t, err)
+	observeFirstServeHTTP(ctx, 500)
+	first.finish(nil, nil)
+	c.Request.URL.Path = "/v1/responses/compact"
+	ctx, _, compact, err := svc.prepareFirstServeHTTP(context.Background(), c, a, []byte(`{}`))
+	require.NoError(t, err)
+	observeFirstServeHTTP(ctx, 60000)
+	slow := 60000
+	compact.finish(&OpenAIForwardResult{FirstTokenMs: &slow, Usage: OpenAIUsage{OutputTokens: 99}}, nil)
+	require.Equal(t, "ready", compact.entry.state.status.Reason)
+	require.Equal(t, 500, *compact.entry.state.status.FirstTokenMs)
+	require.False(t, compact.entry.state.pending)
+	require.Equal(t, "compact", compact.entry.state.status.LastRequest.Outcome)
+}
+
+func TestFirstServeHTTPJSONForwardReportsUsageWithoutTTFT(t *testing.T) {
+	for _, passthrough := range []bool{false, true} {
+		a := firstServeHTTPAccount(t)
+		a.Extra["openai_passthrough"] = passthrough
+		upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK,
+			Header: http.Header{"Content-Type": {"application/json"}},
+			Body:   io.NopCloser(strings.NewReader(`{"id":"resp_json","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}],"usage":{"input_tokens":10,"output_tokens":2}}`)),
+		}}
+		svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+		result, err := svc.Forward(context.Background(), firstServeHTTPContext(1, "session"), a, []byte(`{"model":"gpt-5.4","stream":false,"input":"hello"}`))
+		require.NoError(t, err)
+		require.Nil(t, result.FirstTokenMs)
+		require.Equal(t, 2, result.Usage.OutputTokens)
+		for _, entry := range svc.openaiFirstServeHTTP.items {
+			require.Equal(t, "non_stream", entry.state.status.Reason)
+			require.Equal(t, 2, *entry.state.status.LastRequest.OutputTokens)
+		}
+	}
 }

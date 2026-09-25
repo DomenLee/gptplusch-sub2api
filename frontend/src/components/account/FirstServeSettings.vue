@@ -4,6 +4,14 @@
       <p class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ t(`${prefix}.title`) }}</p>
       <p class="input-hint">{{ t(`${prefix}.hint`) }}</p>
     </div>
+    <label class="block">
+      <span class="input-label">{{ t(`${prefix}.reuseScope`) }}</span>
+      <select :value="modelValue.reuse_scope" class="input" data-testid="first-serve-scope" @change="setScope(($event.target as HTMLSelectElement).value)">
+        <option value="session">{{ t(`${prefix}.scopeSession`) }}</option>
+        <option value="account">{{ t(`${prefix}.scopeAccount`) }}</option>
+      </select>
+      <span class="input-hint">{{ t(`${prefix}.scopeHint`) }}</span>
+    </label>
     <div class="grid gap-4 sm:grid-cols-2">
       <label v-for="field in firstServeFields.slice(0, 2)" :key="field.key" class="block">
         <span class="input-label">{{ t(`${prefix}.${field.key}`) }}</span>
@@ -94,6 +102,9 @@ const issueText = computed(() => {
 
 function set<K extends keyof FirstServeConfig>(key: K, value: FirstServeConfig[K]) {
   emit('update:modelValue', { ...props.modelValue, [key]: value })
+}
+function setScope(value: string) {
+  set('reuse_scope', value === 'account' ? 'account' : 'session')
 }
 function setMode(value: string) {
   emit('update:modelValue', { ...props.modelValue, proxy_mode: value === 'selected' ? 'selected' : 'all', proxy_ids: [] })
