@@ -19,6 +19,8 @@
       </button>
     </div>
     <template v-if="enabled">
+      <p v-if="issue" role="alert" class="text-sm text-red-600 dark:text-red-400">{{ issueText }}</p>
+      <p v-else-if="availableCount < 2" role="status" class="text-xs text-amber-700 dark:text-amber-400">{{ t(`${prefix}.fewAvailable`, { name: accountName, count: availableCount }) }}</p>
       <details
         ref="configPanel"
         :open="expanded"
@@ -90,8 +92,6 @@
           <slot v-if="expanded" />
         </div>
       </details>
-      <p v-if="issue" role="alert" class="text-sm text-red-600 dark:text-red-400">{{ issueText }}</p>
-      <p v-else-if="availableCount < 2" role="status" class="text-xs text-amber-700 dark:text-amber-400">{{ t(`${prefix}.fewAvailable`, { name: accountName, count: availableCount }) }}</p>
     </template>
   </section>
 </template>
@@ -122,6 +122,16 @@ const configPanel = ref<HTMLDetailsElement>()
 const advanced = ref<HTMLDetailsElement>()
 const expanded = ref(false)
 watch(() => props.enabled, () => { expanded.value = false })
+watch([() => props.enabled, () => props.proxyGroups], () => {
+  if (!props.enabled || props.proxyGroupId) return
+  const defaultGroup = props.proxyGroups.find(item => item.status === 'active' && item.available_member_count >= 2
+    && (props.modelValue.proxy_mode === 'all' || props.modelValue.proxy_ids.every(id => item.proxy_ids.includes(id))))
+  if (!defaultGroup) {
+    expanded.value = true
+    return
+  }
+  emit('update:proxyGroupId', defaultGroup.id)
+}, { immediate: true })
 const group = computed(() => props.proxyGroups.find(item => item.id === props.proxyGroupId))
 const members = computed(() => props.proxies.filter(proxy => group.value?.proxy_ids.includes(proxy.id)))
 const missing = computed(() => props.modelValue.proxy_ids.filter(id => !members.value.some(proxy => proxy.id === id)))

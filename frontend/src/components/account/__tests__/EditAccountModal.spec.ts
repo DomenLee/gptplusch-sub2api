@@ -1496,6 +1496,22 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_oauth_responses_websockets_v2_enabled).toBe(true)
   })
 
+  it('saves the default first serve group and clears the previous single proxy binding', async () => {
+    const account = { ...buildOpenAISetupTokenAccount(), proxy_id: 99 }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await wrapper.setProps({ proxyGroups: [{ id: 12, name: 'Group A', status: 'active', proxy_ids: [1, 2], member_count: 2, available_member_count: 2, account_count: 0, created_at: '', updated_at: '' }] })
+    await wrapper.get('[data-testid="first-serve-toggle"]').trigger('click')
+    expect((wrapper.get('[data-testid="first-serve-group"]').element as HTMLSelectElement).value).toBe('12')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.proxy_group_id).toBe(12)
+    expect(updateAccountMock.mock.calls[0]?.[1]).not.toHaveProperty('proxy_id')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_oauth_responses_websockets_v2_mode).toBe('first_serve')
+    wrapper.unmount()
+  })
+
   it('saves first serve mode with its proxy group and rejects a missing group', async () => {
     const account = { ...buildOpenAISetupTokenAccount(), proxy_group_id: 12 }
     updateAccountMock.mockReset().mockResolvedValue(account)

@@ -781,7 +781,7 @@ export default {
           missingProxy: "代理 #{id} 已移出当前组或记录不可用",
           advanced: "高级设置：切换与冷却",
           retryHint: "连续切换仍未达标时暂停指定秒数；没有可切换代理时也按该时间重试。首 token 达标后重置连续切换次数。",
-          groupRequired: "账号 {name}：请选择包含至少两个不同出口的代理组。",
+          groupRequired: "账号 {name}：请选择包含至少两个不同出口的代理组；若没有合适的组，请先到代理管理添加或启用代理组及代理后刷新页面。",
           numberInvalid: "账号 {name}：{field} 必须为 {min}–{max} 的整数，请修改后保存。",
           selectTwo: "账号 {name}：请勾选至少两个不同出口的代理，或明确改为全组可用代理。",
           outsideGroup: "账号 {name}：代理 {ids} 不属于当前代理组，请移除并重新选择。",

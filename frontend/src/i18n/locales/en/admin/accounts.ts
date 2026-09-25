@@ -664,7 +664,7 @@ export default {
           missingProxy: "Proxy #{id} is outside this group or unavailable",
           advanced: "Advanced: rotation and cooldown",
           retryHint: "Pause for this duration after consecutive slow rotations, or when no alternative proxy is available. An acceptable first-token time resets the rotation count.",
-          groupRequired: "Account {name}: Select a proxy group with at least two distinct exits.",
+          groupRequired: "Account {name}: Select a proxy group with at least two distinct exits. If none is suitable, add or enable a proxy group and its proxies in Proxy Management, then refresh the page.",
           numberInvalid: "Account {name}: {field} must be an integer from {min} to {max}. Correct it before saving.",
           selectTwo: "Account {name}: Select at least two distinct exits, or explicitly allow all group members.",
           outsideGroup: "Account {name}: Proxies {ids} are outside this group. Remove them and select again.",

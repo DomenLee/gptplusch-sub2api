@@ -225,7 +225,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
     await wrapper.get('[data-testid="first-serve-toggle"]').trigger('click')
     await flushPromises()
-    await wrapper.get('[data-testid="first-serve-group"]').setValue('10')
+    expect((wrapper.get('[data-testid="first-serve-group"]').element as HTMLSelectElement).value).toBe('10')
     expect((wrapper.get('[data-testid="first-serve-scope"]').element as HTMLSelectElement).value).toBe('account')
     await wrapper.get('[data-testid="first-serve-ttl_minutes"]').setValue('12')
     await wrapper.get('[data-testid="first-serve-ttft_seconds"]').setValue('6')
