@@ -9,7 +9,10 @@
     <p v-if="error" role="alert" class="text-red-600 dark:text-red-400">{{ error }}</p>
     <p v-else-if="!rows.length" class="text-gray-500">{{ t('admin.accounts.openai.firstServeEmpty') }}</p>
     <div v-for="row in rows" :key="row.id" class="space-y-1 border-t border-gray-200 pt-2 dark:border-dark-600">
-      <p>{{ accountName }} · {{ row.proxy_name || '#' + row.proxy_id }} · {{ row.conn_id || '—' }}</p>
+      <p>{{ accountName }} · {{ row.proxy_name || '#' + row.proxy_id }} · {{ row.conn_id || '—' }} · {{ row.transport === 'http' ? 'HTTP / SSE' : 'WebSocket' }}</p>
+      <p v-if="row.session_missing" role="alert" class="text-amber-700 dark:text-amber-400">
+        {{ t('admin.accounts.openai.firstServeSessionMissing', { name: accountName }) }}
+      </p>
       <p :class="warning(row.reason) ? 'text-amber-700 dark:text-amber-400' : 'text-gray-600 dark:text-gray-300'" :role="warning(row.reason) ? 'alert' : undefined">
         {{ t(`admin.accounts.openai.firstServeReasons.${row.reason}`, {
           threshold: row.config?.ttft_seconds ?? 15,

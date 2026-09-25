@@ -100,7 +100,7 @@ func TestFirstServeAccountValidation(t *testing.T) {
 	a.ProxyGroupID = &group
 	require.NoError(t, validateOpenAIFirstServe(a))
 	a.Extra["openai_ws_force_http"] = true
-	require.Error(t, validateOpenAIFirstServe(a))
+	require.NoError(t, validateOpenAIFirstServe(a), "HTTP/SSE first serve does not require WebSocket")
 	a.Extra["openai_apikey_responses_websockets_v2_mode"] = OpenAIWSIngressModeCtxPool
 	require.NoError(t, validateOpenAIFirstServe(a), "existing modes keep their behavior")
 }

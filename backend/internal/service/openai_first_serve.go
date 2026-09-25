@@ -28,26 +28,25 @@ func validateOpenAIFirstServe(account *Account) error {
 	if account.ProxyGroupID == nil || *account.ProxyGroupID <= 0 {
 		return infraerrors.BadRequest("FIRST_SERVE_PROXY_GROUP_REQUIRED", fmt.Sprintf("账号 %s：首服模式需要代理组，请配置至少两个不同出口的代理。", account.Name))
 	}
-	if account.IsOpenAIWSForceHTTPEnabled() {
-		return infraerrors.BadRequest("FIRST_SERVE_REQUIRES_WS", fmt.Sprintf("账号 %s：首服模式需要 WebSocket，请关闭强制 HTTP。", account.Name))
-	}
 	_, err := account.firstServeConfig()
 	return err
 }
 
 type OpenAIFirstServeStatus struct {
-	ID           string                 `json:"id"`
-	AccountID    int64                  `json:"account_id"`
-	ProxyID      int64                  `json:"proxy_id"`
-	ProxyName    string                 `json:"proxy_name"`
-	ConnID       string                 `json:"conn_id"`
-	ExpiresAt    time.Time              `json:"expires_at"`
-	UpdatedAt    time.Time              `json:"updated_at"`
-	FirstTokenMs *int                   `json:"first_token_ms"`
-	Rotations    int                    `json:"rotations"`
-	Reason       string                 `json:"reason"`
-	Active       bool                   `json:"active"`
-	Config       OpenAIFirstServeConfig `json:"config"`
+	Transport      string                 `json:"transport"`
+	SessionMissing bool                   `json:"session_missing,omitempty"`
+	ID             string                 `json:"id"`
+	AccountID      int64                  `json:"account_id"`
+	ProxyID        int64                  `json:"proxy_id"`
+	ProxyName      string                 `json:"proxy_name"`
+	ConnID         string                 `json:"conn_id"`
+	ExpiresAt      time.Time              `json:"expires_at"`
+	UpdatedAt      time.Time              `json:"updated_at"`
+	FirstTokenMs   *int                   `json:"first_token_ms"`
+	Rotations      int                    `json:"rotations"`
+	Reason         string                 `json:"reason"`
+	Active         bool                   `json:"active"`
+	Config         OpenAIFirstServeConfig `json:"config"`
 }
 
 // Only diagnostic snapshots are global. No credentials or conversation data
@@ -62,9 +61,12 @@ func GetOpenAIFirstServeStatuses(accountID int64) []OpenAIFirstServeStatus {
 	defer openAIFirstServeStatuses.Unlock()
 	result := make([]OpenAIFirstServeStatus, 0)
 	for id, status := range openAIFirstServeStatuses.items {
-		if time.Since(status.UpdatedAt) > time.Hour {
+		if time.Since(status.UpdatedAt) > time.Hour && (status.Transport != "http" || time.Now().After(status.ExpiresAt)) {
 			delete(openAIFirstServeStatuses.items, id)
 			continue
+		}
+		if status.Transport == "http" && time.Now().After(status.ExpiresAt) {
+			status.Active = false
 		}
 		if status.AccountID == accountID {
 			result = append(result, status)
@@ -96,7 +98,7 @@ func newOpenAIFirstServeState(account *Account, connID string, now time.Time) *o
 	if err != nil {
 		cfg = defaultOpenAIFirstServeConfig()
 	}
-	s := &openAIFirstServeState{status: OpenAIFirstServeStatus{ID: uuid.NewString(), AccountID: account.ID, Config: cfg}}
+	s := &openAIFirstServeState{status: OpenAIFirstServeStatus{ID: uuid.NewString(), AccountID: account.ID, Config: cfg, Transport: "ws"}}
 	s.bind(account.Proxy, connID, now)
 	return s
 }

@@ -1132,6 +1132,8 @@ export async function refreshOpenCodeGoUsage(id: number): Promise<OpenCodeGoUsag
 }
 
 export interface FirstServeStatus {
+  transport?: 'http' | 'ws'
+  session_missing?: boolean
   id: string
   account_id: number
   proxy_id: number
