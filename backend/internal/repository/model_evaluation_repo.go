@@ -48,7 +48,7 @@ func (r *modelEvaluationRepository) List(ctx context.Context, targetType string,
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]*service.ModelEvaluationReport, 0)
 	for rows.Next() {
 		report, err := scanEvaluationReport(rows)
@@ -75,7 +75,7 @@ func (r *modelEvaluationRepository) Get(ctx context.Context, id string) (*servic
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	report.Results = make([]*service.ModelEvaluationRound, 0)
 	// Derive detail counters from these rows so a concurrent completion cannot
 	// leave the report summary inconsistent with its displayed answers.
@@ -119,7 +119,7 @@ func (r *modelEvaluationRepository) Reserve(ctx context.Context, id string, numb
 	if err != nil {
 		return nil, false, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var rounds int
 	if err := tx.QueryRowContext(ctx, `SELECT rounds FROM model_evaluation_reports WHERE id=$1 FOR UPDATE`, id).Scan(&rounds); err != nil {
 		return nil, false, err

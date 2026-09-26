@@ -171,7 +171,9 @@ func TestModelEvaluationFixedAccountAndFreshPrompt(t *testing.T) {
 
 func TestModelEvaluationGroupPolicyAndAcquiredSlot(t *testing.T) {
 	s, gateway, slots := newEvaluationTestService()
-	group := s.groups.(evaluationGroupsStub).group
+	groups, ok := s.groups.(evaluationGroupsStub)
+	require.True(t, ok)
+	group := groups.group
 	group.MaxReasoningEffort = "medium"
 	group.ModelAllowlist = GroupModelAllowlist{Enabled: true, Models: []string{"public-model"}}
 	gateway.mapping = ChannelMappingResult{Mapped: true, MappedModel: "gpt-5.4"}
@@ -221,7 +223,9 @@ func TestModelEvaluationScopeAndConcurrency(t *testing.T) {
 		},
 	} {
 		s, gateway, _ := newEvaluationTestService()
-		change(s.accounts.(evaluationAccountsStub).account)
+		accounts, ok := s.accounts.(evaluationAccountsStub)
+		require.True(t, ok)
+		change(accounts.account)
 		result, err := s.Run(context.Background(), ModelEvaluationRequest{TargetType: "account", TargetID: 42, Model: "gpt-5.4", Effort: "high"})
 		require.NoError(t, err)
 		require.Equal(t, "error", result.Status)

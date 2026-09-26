@@ -40,14 +40,14 @@ func TestModelEvaluationRepositoryReservationDoesNotDuplicateOrSkipRounds(t *tes
 			require.ErrorIs(t, err, service.ErrEvaluationRoundConflict)
 		}
 		require.NoError(t, mock.ExpectationsWereMet())
-		db.Close()
+		_ = db.Close()
 	}
 }
 
 func TestModelEvaluationRepositoryFinishDoesNotClaimMissingRecordWasSaved(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo := &modelEvaluationRepository{db: db}
 	mock.ExpectExec("UPDATE model_evaluation_rounds").WithArgs("report", 1, "correct", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
 	err = repo.Finish(context.Background(), "report", &service.ModelEvaluationRound{Round: 1, Result: &service.ModelEvaluationResult{Status: "correct"}})
