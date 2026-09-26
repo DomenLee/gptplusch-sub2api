@@ -2590,7 +2590,8 @@
         v-if="show && form.platform === 'openai' && (accountCategory === 'oauth-based' || accountCategory === 'apikey')"
         ref="firstServeSettings"
         v-model="firstServeConfig"
-        v-model:enabled="firstServeEnabled"
+        :enabled="firstServeEnabled"
+        @update:enabled="setFirstServe"
         :proxy-group-id="form.proxy_group_id"
         :account-name="form.name"
         :proxies="proxies"
@@ -4660,6 +4661,11 @@ const geminiSelectedTier = computed(() => {
 const firstServeEnabled = ref(false)
 const firstServeConfig = ref(readFirstServeConfig())
 const firstServeSettings = ref<InstanceType<typeof FirstServeSettings>>()
+function setFirstServe(enabled: boolean) {
+  firstServeEnabled.value = enabled
+  if (enabled) codexFingerprintMode.value = 'full'
+}
+
 
 const openAIWSModeOptions = computed(() => [
   { value: OPENAI_WS_MODE_OFF, label: t('admin.accounts.openai.wsModeOff') },
@@ -4934,6 +4940,9 @@ watch(
       openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
       codexCLIOnlyEnabled.value = false
       codexCLIOnlyAppServerEnabled.value = false
+    } else if (accountCategory.value === 'oauth-based' || accountCategory.value === 'apikey') {
+      // New OpenAI accounts use fixed-interval first serve by default.
+      setFirstServe(true)
     }
     if (newPlatform !== 'anthropic') {
       anthropicPassthroughEnabled.value = false
@@ -5456,7 +5465,12 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
 
   const extra: Record<string, unknown> = { ...(base || {}) }
   if (firstServeEnabled.value) {
-    extra.openai_first_serve = { ...firstServeConfig.value, proxy_ids: [...firstServeConfig.value.proxy_ids] }
+    const config = { ...firstServeConfig.value }
+    delete config.ttl_minutes
+    delete config.ttft_seconds
+    delete config.max_switches
+    delete config.cooldown_seconds
+    extra.openai_first_serve = { ...config, proxy_ids: [...firstServeConfig.value.proxy_ids] }
   }
   if (accountCategory.value === 'oauth-based') {
     extra.openai_oauth_responses_websockets_v2_mode = firstServeEnabled.value ? OPENAI_WS_MODE_FIRST_SERVE : openaiOAuthResponsesWebSocketV2Mode.value
@@ -5497,9 +5511,9 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
   } else {
     delete extra.codex_cli_only_allow_app_server
   }
-  // 收敛是显式 opt-in：off 即默认值，不落键；device/session/full 必须显式写入，
-  // 否则管理员的选择会被当成默认而丢失（#5610）。
-  if (codexFingerprintMode.value !== 'off') {
+  // OpenAI OAuth defaults to full Codex fingerprint convergence. The
+  // passthrough switch above remains independent and is never enabled here.
+  if (form.type === 'oauth') {
     extra.codex_fingerprint_mode = codexFingerprintMode.value
   } else {
     delete extra.codex_fingerprint_mode
@@ -5657,10 +5671,6 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
 
 const handleSubmit = async () => {
   if (form.platform === 'openai' && firstServeEnabled.value && firstServeSettings.value && !firstServeSettings.value.validate()) return
-  if (form.platform === 'openai' && firstServeEnabled.value && !form.proxy_group_id) {
-    appStore.showError(t('admin.accounts.openai.firstServeProxyRequired', { name: form.name }))
-    return
-  }
   // For OAuth-based type, handle OAuth flow (goes to step 2)
   if (isOAuthFlow.value) {
     if (!isGrokSSOInputMethod.value && !form.name.trim()) {
@@ -6510,7 +6520,7 @@ const handleOpenAIImportCodexSession = async (content: string) => {
       failed: result.failed
     }
 
-    if (successCount > 0 && result.failed === 0) {
+    if (successCount > 0 && result.failed === 0 && !result.warnings?.length) {
       appStore.showSuccess(t('admin.accounts.oauth.openai.codexSessionImportSuccess', params))
       emit('created')
       handleClose()
@@ -6522,6 +6532,7 @@ const handleOpenAIImportCodexSession = async (content: string) => {
     oauthClient.error.value = [errorText, warningText].filter(Boolean).join('\n')
 
     if (result.failed === 0) {
+      if (successCount > 0) emit('created')
       appStore.showWarning(t('admin.accounts.oauth.openai.codexSessionImportSuccess', params))
       return
     }

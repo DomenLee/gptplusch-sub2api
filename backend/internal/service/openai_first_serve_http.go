@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -29,19 +30,26 @@ type openAIFirstServeHTTPRegistry struct {
 }
 
 type openAIFirstServeHTTPEntry struct {
-	mu       sync.Mutex
-	state    *openAIFirstServeState
-	refs     int       // protected by registry.mu
-	lastUsed time.Time // protected by registry.mu
+	mu              sync.Mutex
+	state           *openAIFirstServeState
+	fingerprintSeed string    // renewed only when proxy selection succeeds; protected by mu
+	refs            int       // protected by registry.mu
+	lastUsed        time.Time // protected by registry.mu
 }
 
 type openAIFirstServeHTTPKey struct{}
+
+type openAIFirstServeRouteOptions struct {
+	fallbackScope string // stable for a native WS connection or a Live call
+	webSocket     bool
+}
 
 type openAIFirstServeHTTPLease struct {
 	registry       *openAIFirstServeHTTPRegistry
 	entry          *openAIFirstServeHTTPEntry
 	key            string
 	id             string
+	fingerprint    string // immutable device identity for the captured proxy generation
 	accountID      int64
 	conversationID string
 	shared         bool
@@ -104,13 +112,22 @@ func (l *openAIFirstServeHTTPLease) release() {
 }
 
 func (s *OpenAIGatewayService) prepareFirstServeHTTP(ctx context.Context, c *gin.Context, account *Account, body []byte) (context.Context, *Account, *openAIFirstServeHTTPLease, error) {
-	if !account.IsOpenAIFirstServe() || c == nil || c.Request == nil || c.Request.Method != http.MethodPost || GetOpenAIClientTransport(c) == OpenAIClientTransportWS {
+	if c == nil || c.Request == nil || GetOpenAIClientTransport(c) == OpenAIClientTransportWS {
+		return ctx, account, nil, nil
+	}
+	return s.prepareFirstServeRoute(ctx, c, account, body, openAIFirstServeRouteOptions{})
+}
+
+// HTTP requests and WebSocket turns share proxy selection and routing identity;
+// WebSocket replay history remains private to its connection.
+func (s *OpenAIGatewayService) prepareFirstServeRoute(ctx context.Context, c *gin.Context, account *Account, body []byte, options openAIFirstServeRouteOptions) (context.Context, *Account, *openAIFirstServeHTTPLease, error) {
+	if !account.IsOpenAIFirstServe() {
 		return ctx, account, nil, nil
 	}
 	if l := firstServeHTTPLease(ctx); l != nil && l.accountID == account.ID {
 		return ctx, account, nil, nil // internal retry belongs to the same request
 	}
-	if err := validateOpenAIFirstServe(account); err != nil {
+	if err := validateOpenAIFirstServeRouting(account); err != nil {
 		return ctx, account, nil, err
 	}
 	cfg, err := account.firstServeConfig()
@@ -132,7 +149,12 @@ func (s *OpenAIGatewayService) prepareFirstServeHTTP(ctx context.Context, c *gin
 	if missing {
 		// A content hash is not a conversation identity. Do not merge unrelated
 		// chats just because they use the same account/API key or initial prompt.
-		scope = uuid.NewString()
+		scope = options.fallbackScope
+		if scope == "" {
+			scope = uuid.NewString()
+		} else {
+			missing = false
+		}
 	}
 	groupID := getOpenAIGroupIDFromContext(c)
 	key := fmt.Sprintf("%d:%d:%s:%s", account.ID, groupID, scope, cfg.key(*account.ProxyGroupID))
@@ -151,6 +173,9 @@ func (s *OpenAIGatewayService) prepareFirstServeHTTP(ctx context.Context, c *gin
 	if isExplicitOpenAICompactRequest(c, body) || isOpenAINativeCompactionV2(c) {
 		kind = "compact"
 	}
+	if options.webSocket {
+		kind = "ws" // native WS diagnostics are recorded by its connection state
+	}
 	now := time.Now()
 	entry, err := s.openaiFirstServeHTTP.acquire(key, now)
 	if err != nil {
@@ -168,32 +193,25 @@ func (s *OpenAIGatewayService) prepareFirstServeHTTP(ctx context.Context, c *gin
 	state := entry.state
 	copyAccount := *account
 	copyAccount.Proxy = state.proxy
-	if state.proxy == nil && now.Before(state.retryAt) {
-		l.release()
-		return ctx, account, nil, ErrProxyGroupNoProxy
-	}
 	if state.proxy == nil || state.due(now) {
-		// Server-side continuation may be tied to its original session. Keep
-		// that combination until the client sends a self-contained request.
-		if state.proxy != nil && gjson.GetBytes(body, "previous_response_id").String() != "" {
-			state.publish("context_incomplete", now)
-		} else {
-			proxy, selectErr := selectOpenAIFirstServeProxy(ctx, &copyAccount, state.status.ProxyID)
-			if selectErr != nil {
-				state.retryAt = now.Add(cfg.cooldown())
-				state.publish("proxy_unavailable", now)
-				if state.proxy == nil {
-					l.release()
-					return ctx, account, nil, selectErr
-				}
-			} else {
-				if state.proxy != nil {
-					state.attempts++
-					state.status.Rotations++
-				}
-				state.bind(proxy, uuid.NewString(), now)
-				l.fresh = true
+		// A fixed interval controls rotation. previous_response_id is preserved
+		// in the request body and does not delay selecting the next proxy.
+		proxy, selectErr := selectOpenAIFirstServeProxy(ctx, &copyAccount, state.status.ProxyID)
+		if selectErr != nil {
+			state.publish("proxy_unavailable", now)
+			if state.proxy == nil {
+				l.release()
+				return ctx, account, nil, selectErr
 			}
+		} else {
+			if state.proxy != nil {
+				state.status.Rotations++
+				state.rotate(proxy, now)
+			} else {
+				state.bind(proxy, uuid.NewString(), now)
+			}
+			l.fresh = true
+			entry.fingerprintSeed = newCodexFingerprintSeed()
 		}
 	}
 	if kind == "stream" {
@@ -201,13 +219,24 @@ func (s *OpenAIGatewayService) prepareFirstServeHTTP(ctx context.Context, c *gin
 	}
 	state.publish(state.status.Reason, now)
 	l.id = state.status.ConnID
+	if account.GetCodexFingerprintMode() != codexFingerprintOff {
+		// Keep the stored account identity intact. Every request receives the
+		// same generation seed, including an old request finishing after rotation.
+		copyAccount.Extra = maps.Clone(account.Extra)
+		copyAccount.Extra[codexFingerprintSeedExtraKey] = entry.fingerprintSeed
+		delete(copyAccount.Extra, "openai_device_id")
+		l.fingerprint = resolveConvergedInstallationID(&copyAccount, entry.fingerprintSeed)
+		copyAccount.Extra["openai_device_id"] = l.fingerprint
+	}
+	if account.GetCodexFingerprintMode() == codexFingerprintFull {
+		l.conversationID = l.id
+	}
 	l.uses = state.uses
 	copyAccount.Proxy, copyAccount.ProxyID, copyAccount.proxyGroupResolved = state.proxy, &state.proxy.ID, true
 	return context.WithValue(ctx, openAIFirstServeHTTPKey{}, l), &copyAccount, l, nil
 }
 
-// Called where the existing streaming parser recognizes first output. A slow
-// stream can mark the combination before it ends, without interrupting it.
+// Record first output timing for diagnostics only. Rotation depends on time.
 func observeFirstServeHTTP(ctx context.Context, ms int) {
 	l := firstServeHTTPLease(ctx)
 	if l == nil || l.kind != "stream" {
@@ -215,7 +244,7 @@ func observeFirstServeHTTP(ctx context.Context, ms int) {
 	}
 	l.entry.mu.Lock()
 	defer l.entry.mu.Unlock()
-	if l.observed || l.entry.state.status.ConnID != l.id {
+	if l.observed || l.entry.state.uses != l.uses {
 		return
 	}
 	l.observed = true
@@ -248,13 +277,10 @@ func (l *openAIFirstServeHTTPLease) finish(result *OpenAIForwardResult, err erro
 		result.FirstServeActive = l.kind == "stream" && l.applied && l.reused
 	}
 	state := l.entry.state
-	if state.status.ConnID != l.id {
+	if state.uses != l.uses {
 		return // an older concurrent response must not overwrite the new combination
 	}
 	if l.kind != "stream" {
-		if err != nil {
-			state.pending = true
-		}
 		return // keep the most recent streaming diagnostics intact
 	}
 	now := time.Now()
@@ -267,7 +293,6 @@ func (l *openAIFirstServeHTTPLease) finish(result *OpenAIForwardResult, err erro
 	switch {
 	case err != nil:
 		last.Outcome = "request_failed"
-		state.pending = true
 		state.publish("connection_failed", now)
 	case l.observed:
 		last.Outcome = "measured"
@@ -275,7 +300,7 @@ func (l *openAIFirstServeHTTPLease) finish(result *OpenAIForwardResult, err erro
 		last.Outcome = "measured"
 		state.observe(*result.FirstTokenMs, now)
 	}
-	if state.status.FirstTokenMs == nil && !state.pending {
+	if state.status.FirstTokenMs == nil && err == nil {
 		state.status.Reason = last.Outcome
 	}
 	state.status.LastRequest = last
@@ -293,25 +318,7 @@ func applyFirstServeHTTPRequest(req *http.Request, account *Account) error {
 	if l == nil || l.accountID != account.ID {
 		return nil
 	}
-	for _, key := range []string{"session_id", "session-id", "conversation_id"} {
-		req.Header.Set(key, l.id)
-	}
-	metadata := map[string]any{"session_id": l.id}
-	if l.shared {
-		req.Header.Set("conversation_id", l.conversationID)
-		metadata["thread_id"] = l.conversationID
-		metadata["window_id"] = l.conversationID
-		for _, key := range []string{"thread-id", "x-client-request-id", "x-codex-window-id"} {
-			if req.Header.Get(key) != "" {
-				req.Header.Set(key, l.conversationID)
-			}
-		}
-	}
-	rewriteCodexTurnMetadataFields(req.Header, metadata)
-	if l.fresh || l.shared {
-		// A client echo must not pin an account-wide combination to its old route.
-		req.Header.Del("x-codex-turn-state")
-	}
+	applyFirstServeHeaders(req.Header, l)
 	if !strings.HasSuffix(strings.TrimRight(req.URL.Path, "/"), "/responses") || req.GetBody == nil {
 		return nil
 	}
@@ -324,14 +331,73 @@ func applyFirstServeHTTPRequest(req *http.Request, account *Account) error {
 	if err != nil {
 		return err
 	}
-	body, err = sjson.SetBytes(body, "prompt_cache_key", l.id)
+	body, err = applyFirstServeBody(body, l)
 	if err != nil {
 		return err
+	}
+	_ = req.Body.Close()
+	req.Body = io.NopCloser(bytes.NewReader(body))
+	req.ContentLength = int64(len(body))
+	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
+	return nil
+}
+
+func firstServeMetadata(l *openAIFirstServeHTTPLease) map[string]any {
+	metadata := map[string]any{"session_id": l.id}
+	if l.fingerprint != "" {
+		metadata["installation_id"] = l.fingerprint
+	}
+	if l.shared {
+		metadata["thread_id"] = l.conversationID
+		metadata["window_id"] = l.conversationID
+	}
+	return metadata
+}
+
+func applyFirstServeHeaders(headers http.Header, l *openAIFirstServeHTTPLease) {
+	if l.fingerprint != "" {
+		headers.Set("x-codex-installation-id", l.fingerprint)
+	}
+	for _, key := range []string{"session_id", "session-id", "conversation_id"} {
+		headers.Set(key, l.id)
+	}
+	metadata := firstServeMetadata(l)
+	if l.shared {
+		headers.Set("conversation_id", l.conversationID)
+		for _, key := range []string{"thread-id", "x-client-request-id", "x-codex-window-id"} {
+			if headers.Get(key) != "" {
+				headers.Set(key, l.conversationID)
+			}
+		}
+	}
+	rewriteCodexTurnMetadataFields(headers, metadata)
+	if l.fresh || l.shared {
+		// A client echo must not pin an account-wide combination to its old route.
+		headers.Del("x-codex-turn-state")
+	}
+}
+
+func applyFirstServeBody(body []byte, l *openAIFirstServeHTTPLease) ([]byte, error) {
+	body, err := sjson.SetBytes(body, "prompt_cache_key", l.id)
+	if err != nil {
+		return nil, err
+	}
+	if l.fingerprint != "" {
+		body, err = sjson.SetBytes(body, "client_metadata.x-codex-installation-id", l.fingerprint)
+		if err != nil {
+			return nil, err
+		}
+		if gjson.GetBytes(body, "client_metadata.installation_id").Exists() {
+			body, err = sjson.SetBytes(body, "client_metadata.installation_id", l.fingerprint)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 	if gjson.GetBytes(body, "client_metadata.session_id").Exists() {
 		body, err = sjson.SetBytes(body, "client_metadata.session_id", l.id)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if l.shared {
@@ -339,7 +405,7 @@ func applyFirstServeHTTPRequest(req *http.Request, account *Account) error {
 			if gjson.GetBytes(body, field).Exists() {
 				body, err = sjson.SetBytes(body, field, l.conversationID)
 				if err != nil {
-					return err
+					return nil, err
 				}
 			}
 		}
@@ -347,15 +413,11 @@ func applyFirstServeHTTPRequest(req *http.Request, account *Account) error {
 	if embedded := gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata"); embedded.Type == gjson.String {
 		headers := http.Header{}
 		headers.Set("x-codex-turn-metadata", embedded.String())
-		rewriteCodexTurnMetadataFields(headers, metadata)
+		rewriteCodexTurnMetadataFields(headers, firstServeMetadata(l))
 		body, err = sjson.SetBytes(body, "client_metadata.x-codex-turn-metadata", headers.Get("x-codex-turn-metadata"))
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
-	_ = req.Body.Close()
-	req.Body = io.NopCloser(bytes.NewReader(body))
-	req.ContentLength = int64(len(body))
-	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
-	return nil
+	return body, nil
 }

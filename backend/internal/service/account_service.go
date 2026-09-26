@@ -249,7 +249,7 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 		Platform:     req.Platform,
 		Type:         req.Type,
 		Credentials:  SanitizeStoredCredentials(req.Platform, req.Credentials),
-		Extra:        prepareCodexFingerprintExtraForCreate(req.Platform, req.Type, req.Extra),
+		Extra:        prepareCodexFingerprintExtraForCreate(req.Platform, req.Type, DefaultOpenAIFirstServeExtra(req.Platform, req.Type, req.Extra)),
 		ProxyID:      req.ProxyID,
 		ProxyGroupID: req.ProxyGroupID,
 		Concurrency:  req.Concurrency,
@@ -263,6 +263,15 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 		account.AutoPauseOnExpired = true
 	}
 
+	if err := validateOpenAIFirstServe(account); err != nil {
+		return nil, err
+	}
+	if err := assignDefaultFirstServeProxyGroup(ctx, account); err != nil {
+		return nil, err
+	}
+	if err := validateOpenAIFirstServeProxies(ctx, account); err != nil {
+		return nil, err
+	}
 	if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, fmt.Errorf("create account: %w", err)
 	}

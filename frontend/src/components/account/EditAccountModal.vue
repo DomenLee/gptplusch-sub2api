@@ -1582,7 +1582,8 @@
         :key="account.id"
         ref="firstServeSettings"
         v-model="firstServeConfig"
-        v-model:enabled="firstServeEnabled"
+        :enabled="firstServeEnabled"
+        @update:enabled="setFirstServe"
         :proxy-group-id="form.proxy_group_id"
         :account-name="form.name"
         :proxies="proxies"
@@ -3769,6 +3770,11 @@ const codexFingerprintModeOptions = computed(() => [
 const firstServeEnabled = ref(false)
 const firstServeConfig = ref(readFirstServeConfig())
 const firstServeSettings = ref<InstanceType<typeof FirstServeSettings>>()
+function setFirstServe(enabled: boolean) {
+  firstServeEnabled.value = enabled
+  if (enabled && (props.account?.type === 'oauth' || props.account?.type === 'setup-token')) codexFingerprintMode.value = 'full'
+}
+
 
 const openAIWSModeOptions = computed(() => [
   { value: OPENAI_WS_MODE_OFF, label: t('admin.accounts.openai.wsModeOff') },
@@ -4274,7 +4280,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       codexCLIOnlyAppServerEnabled.value =
         extra?.codex_cli_only_allow_app_server === true
     }
-    if (newAccount.type === 'oauth') {
+    if (newAccount.type === 'oauth' || newAccount.type === 'setup-token') {
       const fpMode = extra?.codex_fingerprint_mode as string | undefined
       // 缺省/非法值按 off 呈现，与后端 GetCodexFingerprintMode 的 opt-in 语义一致（#5610）
       codexFingerprintMode.value = (['off', 'device', 'session', 'full'].includes(fpMode || '')
@@ -5168,10 +5174,6 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
 const handleSubmit = async () => {
   if (!props.account) return
   if (props.account.platform === 'openai' && firstServeEnabled.value && firstServeSettings.value && !firstServeSettings.value.validate()) return
-  if (props.account.platform === 'openai' && firstServeEnabled.value && !form.proxy_group_id) {
-    appStore.showError(t('admin.accounts.openai.firstServeProxyRequired', { name: form.name }))
-    return
-  }
   const accountID = props.account.id
 
   if (form.status !== 'active' && form.status !== 'inactive' && form.status !== 'error') {
@@ -5710,7 +5712,12 @@ const handleSubmit = async () => {
       const currentExtra = (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
       if (firstServeEnabled.value) {
-        newExtra.openai_first_serve = { ...firstServeConfig.value, proxy_ids: [...firstServeConfig.value.proxy_ids] }
+        const config = { ...firstServeConfig.value }
+        delete config.ttl_minutes
+        delete config.ttft_seconds
+        delete config.max_switches
+        delete config.cooldown_seconds
+        newExtra.openai_first_serve = { ...config, proxy_ids: [...firstServeConfig.value.proxy_ids] }
       }
       const hadCodexCLIOnlyEnabled = currentExtra.codex_cli_only === true
       if (props.account.type === 'oauth' || props.account.type === 'setup-token') {
@@ -5818,10 +5825,9 @@ const handleSubmit = async () => {
         }
       }
 
-      // 指纹收敛模式：默认 off（不写入）；device/session/full 是显式 opt-in，
-      // 必须落键，否则管理员的选择会被后端当作"未设置"而回落到 off（#5610）。
-      if (props.account.type === 'oauth') {
-        if (codexFingerprintMode.value !== 'off') {
+      // 首服模式必须保留显式 off，避免后端按未设置补为 full。
+      if (props.account.type === 'oauth' || (props.account.type === 'setup-token' && firstServeEnabled.value)) {
+        if (firstServeEnabled.value || codexFingerprintMode.value !== 'off') {
           newExtra.codex_fingerprint_mode = codexFingerprintMode.value
         } else {
           delete newExtra.codex_fingerprint_mode

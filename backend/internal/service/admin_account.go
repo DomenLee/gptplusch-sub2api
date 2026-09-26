@@ -493,6 +493,56 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 	return account, nil
 }
 
+// DefaultOpenAIFirstServeExtra enables the fixed-IP rotation policy for
+// every newly created OpenAI account unless the caller explicitly supplied a
+// mode. A proxy group may be attached later (imports often do that in a
+// separate step); runtime validation reports the missing group clearly.
+func DefaultOpenAIFirstServeExtra(platform, accountType string, extra map[string]any) map[string]any {
+	if platform != PlatformOpenAI || (accountType != AccountTypeOAuth && accountType != AccountTypeSetupToken && accountType != AccountTypeAPIKey) {
+		return extra
+	}
+	result := maps.Clone(extra)
+	if result == nil {
+		result = make(map[string]any, 4)
+	}
+	modeKey, enabledKey := "", ""
+	switch accountType {
+	case AccountTypeOAuth, AccountTypeSetupToken:
+		modeKey, enabledKey = "openai_oauth_responses_websockets_v2_mode", "openai_oauth_responses_websockets_v2_enabled"
+	case AccountTypeAPIKey:
+		modeKey, enabledKey = "openai_apikey_responses_websockets_v2_mode", "openai_apikey_responses_websockets_v2_enabled"
+	}
+	explicitMode := false
+	for _, key := range []string{modeKey, enabledKey, "responses_websockets_v2_enabled", "openai_ws_enabled"} {
+		if _, exists := result[key]; exists {
+			explicitMode = true
+			break
+		}
+	}
+	if !explicitMode {
+		result[modeKey] = OpenAIWSIngressModeFirstServe
+		result[enabledKey] = true
+	}
+	account := &Account{Platform: platform, Type: accountType, Extra: result}
+	if !account.IsOpenAIFirstServe() {
+		return result
+	}
+	if _, exists := result["openai_first_serve"]; !exists {
+		result["openai_first_serve"] = map[string]any{
+			"reuse_scope":    "account",
+			"rotate_seconds": 240,
+			"proxy_mode":     "all",
+			"proxy_ids":      []int64{},
+		}
+	}
+	if accountType == AccountTypeOAuth || accountType == AccountTypeSetupToken {
+		if _, exists := result[codexFingerprintModeExtraKey]; !exists {
+			result[codexFingerprintModeExtraKey] = string(codexFingerprintFull)
+		}
+	}
+	return result
+}
+
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
 	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
 	if err != nil {
@@ -502,6 +552,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
+	accountExtra = DefaultOpenAIFirstServeExtra(input.Platform, input.Type, accountExtra)
 	accountExtra, err = normalizeOpenAIAutoResetCreditExtra(input.Platform, input.Type, false, accountExtra)
 	if err != nil {
 		return nil, err
@@ -545,6 +596,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 
 	account, err := buildAccountForCreate(input, accountExtra)
 	if err != nil {
+		return nil, err
+	}
+	if err := assignDefaultFirstServeProxyGroup(ctx, account); err != nil {
 		return nil, err
 	}
 	if err := validateOpenAIFirstServeProxies(ctx, account); err != nil {
@@ -889,6 +943,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 	}
 
+	if err := assignDefaultFirstServeProxyGroup(ctx, account); err != nil {
+		return nil, err
+	}
 	if err := validateOpenAIFirstServe(account); err != nil {
 		return nil, err
 	}

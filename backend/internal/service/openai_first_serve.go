@@ -26,11 +26,20 @@ func validateOpenAIFirstServe(account *Account) error {
 	if !account.IsOpenAIFirstServe() {
 		return nil
 	}
-	if account.ProxyGroupID == nil || *account.ProxyGroupID <= 0 {
-		return infraerrors.BadRequest("FIRST_SERVE_PROXY_GROUP_REQUIRED", fmt.Sprintf("账号 %s：首服模式需要代理组，请配置至少两个不同出口的代理。", account.Name))
-	}
 	_, err := account.firstServeConfig()
 	return err
+}
+
+// Imports can be saved before a proxy group is configured; dispatch must never
+// silently use a direct connection while first serve is enabled.
+func validateOpenAIFirstServeRouting(account *Account) error {
+	if !account.IsOpenAIFirstServe() {
+		return nil
+	}
+	if account.ProxyGroupID == nil || *account.ProxyGroupID <= 0 {
+		return infraerrors.BadRequest("FIRST_SERVE_PROXY_GROUP_REQUIRED", fmt.Sprintf("账号 %s：首服模式需要代理组，请在账号编辑中选择至少两个不同出口的代理。", account.Name))
+	}
+	return validateOpenAIFirstServe(account)
 }
 
 // A request summary contains usage and timing only, never request/response content.
@@ -78,9 +87,6 @@ func GetOpenAIFirstServeStatuses(accountID int64) []OpenAIFirstServeStatus {
 			delete(openAIFirstServeStatuses.items, id)
 			continue
 		}
-		if status.Transport == "http" && time.Now().After(status.ExpiresAt) {
-			status.Active = false
-		}
 		if status.AccountID == accountID {
 			result = append(result, status)
 		}
@@ -96,10 +102,8 @@ type openAIFirstServeState struct {
 	scope       string
 	status      OpenAIFirstServeStatus
 	proxy       *Proxy
+	fingerprint string         // physical WS handshake identity; shared routing owns its lifetime
 	uses        *atomic.Uint64 // per combination; leases retain it across rotations
-	pending     bool
-	retryAt     time.Time
-	attempts    int
 	lastID      string
 	history     []json.RawMessage
 	complete    bool
@@ -151,37 +155,22 @@ func (s *openAIFirstServeState) bind(proxy *Proxy, connID string, now time.Time)
 	if proxy != nil {
 		s.status.ProxyID, s.status.ProxyName = proxy.ID, proxy.Name
 	}
-	s.pending = false
 	s.publish("observing", now)
+}
+
+// rotate changes only the selected proxy. The routing/session ID remains
+// stable so upstream requests continue using the same first-serve identity.
+func (s *openAIFirstServeState) rotate(proxy *Proxy, now time.Time) {
+	s.bind(proxy, s.status.ConnID, now)
 }
 
 func (s *openAIFirstServeState) observe(ms int, now time.Time) {
 	s.status.FirstTokenMs = &ms
-	if time.Duration(ms)*time.Millisecond > time.Duration(s.status.Config.TTFTSeconds)*time.Second {
-		s.pending = true
-		s.publish("slow", now)
-		return
-	}
-	s.attempts = 0
-	if s.pending {
-		s.publish(s.status.Reason, now)
-		return
-	}
 	s.publish("ready", now)
 }
 
 func (s *openAIFirstServeState) due(now time.Time) bool {
-	if now.Before(s.retryAt) || (!s.pending && now.Before(s.status.ExpiresAt)) {
-		return false
-	}
-	s.pending = true
-	if s.attempts >= s.status.Config.MaxSwitches {
-		s.attempts = 0
-		s.retryAt = now.Add(s.status.Config.cooldown())
-		s.publish("cooldown", now)
-		return false
-	}
-	return true
+	return !now.Before(s.status.ExpiresAt)
 }
 
 func (s *openAIFirstServeState) input(payload []byte) {

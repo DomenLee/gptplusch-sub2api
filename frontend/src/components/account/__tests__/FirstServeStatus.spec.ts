@@ -49,7 +49,7 @@ describe('FirstServeStatus', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('Account A · Proxy B')
     expect(wrapper.get('[role="alert"]').text()).toContain('proxy_unavailable')
-    expect(wrapper.get('[role="alert"]').text()).toContain('4,2,10')
+    expect(wrapper.get('[role="alert"]').text()).not.toContain('4,2,10')
     const signal = vi.mocked(getFirstServeStatus).mock.calls[0]?.[1]
     wrapper.unmount()
     expect(signal?.aborted).toBe(true)

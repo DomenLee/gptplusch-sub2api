@@ -17,21 +17,16 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func TestFirstServeThresholdAndFixedExpiry(t *testing.T) {
+func TestFirstServeFixedExpiry(t *testing.T) {
 	now := time.Now()
-	s := newOpenAIFirstServeState(&Account{ID: 98701}, "conn", now)
-	s.observe(15000, now.Add(time.Minute))
-	require.False(t, s.due(now.Add(time.Minute)), "exactly 15 seconds does not rotate")
-	require.Equal(t, now.Add(30*time.Minute), s.status.ExpiresAt, "good samples must not slide expiry")
-	require.True(t, s.due(now.Add(30*time.Minute)))
-	s.bind(nil, "new", now)
-	s.observe(15001, now)
-	require.True(t, s.due(now))
-	s.attempts = 3
-	require.False(t, s.due(now))
-	require.Equal(t, "cooldown", s.status.Reason)
-	require.False(t, s.due(now.Add(59*time.Second)))
-	require.True(t, s.due(now.Add(time.Minute)))
+	s := newOpenAIFirstServeState(&Account{ID: 98701}, "route", now)
+	for _, ms := range []int{100, 15000, 15001, 90000} {
+		s.observe(ms, now.Add(time.Minute))
+		require.False(t, s.due(now.Add(time.Minute)))
+		require.Equal(t, now.Add(240*time.Second), s.status.ExpiresAt, "samples do not renew expiry")
+	}
+	require.False(t, s.due(now.Add(240*time.Second-time.Nanosecond)))
+	require.True(t, s.due(now.Add(240*time.Second)))
 }
 
 func TestFirstServeReplayPreservesConversationAndTools(t *testing.T) {
@@ -96,13 +91,13 @@ func TestFirstServeAccountValidation(t *testing.T) {
 	a := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Name: "test", Extra: map[string]any{
 		"openai_apikey_responses_websockets_v2_mode": OpenAIWSIngressModeFirstServe,
 	}}
-	require.ErrorContains(t, validateOpenAIFirstServe(a), "test")
+	require.ErrorContains(t, validateOpenAIFirstServeRouting(a), "test")
 	a.ProxyGroupID = &group
-	require.NoError(t, validateOpenAIFirstServe(a))
+	require.NoError(t, validateOpenAIFirstServeRouting(a))
 	a.Extra["openai_ws_force_http"] = true
-	require.NoError(t, validateOpenAIFirstServe(a), "HTTP/SSE first serve does not require WebSocket")
+	require.NoError(t, validateOpenAIFirstServeRouting(a), "HTTP/SSE first serve does not require WebSocket")
 	a.Extra["openai_apikey_responses_websockets_v2_mode"] = OpenAIWSIngressModeCtxPool
-	require.NoError(t, validateOpenAIFirstServe(a), "existing modes keep their behavior")
+	require.NoError(t, validateOpenAIFirstServeRouting(a), "existing modes keep their behavior")
 }
 
 type firstServeTestResolver struct {
@@ -129,12 +124,14 @@ type firstServeTestDialer struct {
 	mu      sync.Mutex
 	conns   []openAIWSClientConn
 	proxies []string
+	headers []http.Header
 }
 
-func (d *firstServeTestDialer) Dial(_ context.Context, _ string, _ http.Header, proxy string) (openAIWSClientConn, int, http.Header, error) {
+func (d *firstServeTestDialer) Dial(_ context.Context, _ string, headers http.Header, proxy string) (openAIWSClientConn, int, http.Header, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.proxies = append(d.proxies, proxy)
+	d.headers = append(d.headers, headers.Clone())
 	if len(d.conns) == 0 {
 		return nil, 503, nil, ErrProxyGroupNoProxy
 	}
@@ -151,23 +148,29 @@ func TestFirstServeIngressRotation(t *testing.T) {
 	defaultProxyGroupResolver.RUnlock()
 	defer SetDefaultProxyGroupResolver(oldResolver)
 	for _, tc := range []struct {
-		name                                                    string
-		slow, expire, missingParent, noProxy, reconnect, custom bool
-		wantRotation                                            bool
+		name                                                                          string
+		slow, expire, missingParent, noProxy, reconnect, custom, session, fingerprint bool
+		wantRotation                                                                  bool
 	}{
-		{name: "slow", slow: true, wantRotation: true},
-		{name: "custom threshold", custom: true, wantRotation: true},
+		{name: "slow does not rotate", slow: true},
+		{name: "legacy threshold ignored", custom: true},
 		{name: "expired", expire: true, wantRotation: true},
 		{name: "healthy"},
+		{name: "fingerprint healthy", fingerprint: true},
+		{name: "fingerprint expires", fingerprint: true, expire: true, wantRotation: true},
+		{name: "fingerprint reconnect expires", fingerprint: true, reconnect: true, expire: true, wantRotation: true},
+		{name: "fingerprint no alternative", fingerprint: true, noProxy: true, expire: true},
+		{name: "session without client ID", session: true, expire: true, wantRotation: true},
 		{name: "reconnect_expired", expire: true, reconnect: true, wantRotation: true},
 		{name: "reconnect_healthy", reconnect: true},
-		{name: "unknown parent", expire: true, missingParent: true},
+		{name: "unknown parent", expire: true, missingParent: true, wantRotation: true},
 		{name: "no alternative", expire: true, noProxy: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &config.Config{}
 			cfg.Gateway.OpenAIWS.Enabled = true
 			cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+			cfg.Gateway.OpenAIWS.OAuthEnabled = true
 			cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
 			cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
 			cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
@@ -202,6 +205,16 @@ func TestFirstServeIngressRotation(t *testing.T) {
 			group := int64(10)
 			account := &Account{ID: 98702, Name: "first serve test", Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1, ProxyGroupID: &group,
 				Credentials: map[string]any{"api_key": "sk-test"}, Extra: map[string]any{"openai_apikey_responses_websockets_v2_mode": OpenAIWSIngressModeFirstServe}}
+			if tc.fingerprint {
+				account.Type = AccountTypeOAuth
+				account.Credentials = map[string]any{"access_token": "sk-test", "chatgpt_account_id": "account-test"}
+				account.Extra["openai_oauth_responses_websockets_v2_mode"] = OpenAIWSIngressModeFirstServe
+				account.Extra[codexFingerprintModeExtraKey] = "full"
+				account.Extra[codexFingerprintSeedExtraKey] = testCodexFingerprintSeed
+			}
+			if tc.session {
+				account.Extra["openai_first_serve"] = map[string]any{"reuse_scope": "session"}
+			}
 			if tc.custom {
 				account.Extra["openai_first_serve"] = map[string]any{"ttl_minutes": 12, "ttft_seconds": 1, "proxy_mode": "selected", "proxy_ids": []int64{101, 102}}
 			}
@@ -213,6 +226,11 @@ func TestFirstServeIngressRotation(t *testing.T) {
 				}
 				if turn != 1 || !tc.expire {
 					return
+				}
+				for _, entry := range svc.openaiFirstServeHTTP.items {
+					entry.mu.Lock()
+					entry.state.status.ExpiresAt = time.Now().Add(-time.Second)
+					entry.mu.Unlock()
 				}
 				ap := pool.getOrCreateAccountPool(account.ID)
 				ap.mu.Lock()
@@ -243,7 +261,8 @@ func TestFirstServeIngressRotation(t *testing.T) {
 			defer server.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 			defer cancel()
-			client, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
+			dialOptions := &coderws.DialOptions{HTTPHeader: http.Header{"X-Codex-Installation-Id": []string{"client-installation"}}}
+			client, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), dialOptions)
 			require.NoError(t, err)
 			defer func() { _ = client.CloseNow() }()
 			first := `{"type":"response.create","model":"gpt-5.1","store":false,"input":[{"role":"user","content":"question A"}]}`
@@ -261,7 +280,7 @@ func TestFirstServeIngressRotation(t *testing.T) {
 			if tc.reconnect {
 				_ = client.CloseNow()
 				require.NoError(t, <-errCh)
-				client, _, err = coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
+				client, _, err = coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), dialOptions)
 				require.NoError(t, err)
 				defer func() { _ = client.CloseNow() }()
 			}
@@ -273,7 +292,50 @@ func TestFirstServeIngressRotation(t *testing.T) {
 			require.Equal(t, []bool{false, !tc.wantRotation}, reused)
 			dialer.mu.Lock()
 			proxies := append([]string(nil), dialer.proxies...)
+			headers := append([]http.Header(nil), dialer.headers...)
 			dialer.mu.Unlock()
+			routeID := headers[0].Get("session_id")
+			require.NotEmpty(t, routeID)
+			for _, header := range headers {
+				require.Equal(t, routeID, header.Get("session_id"), "proxy changes retain the wire routing ID")
+				if !tc.fingerprint {
+					require.Equal(t, "client-installation", header.Get("x-codex-installation-id"), "convergence off preserves the client fingerprint without repeated reconnects")
+				}
+			}
+			if tc.fingerprint {
+				firstID := headers[0].Get("x-codex-installation-id")
+				require.NotEmpty(t, firstID)
+				lastID := headers[len(headers)-1].Get("x-codex-installation-id")
+				if tc.wantRotation {
+					require.NotEqual(t, firstID, lastID)
+				} else {
+					require.Equal(t, firstID, lastID)
+				}
+				for i, conn := range []*openAIWSCaptureConn{firstConn, secondConn} {
+					expected := firstID
+					if i == 1 {
+						expected = lastID
+					}
+					conn.mu.Lock()
+					writes := append([]map[string]any(nil), conn.writes...)
+					conn.mu.Unlock()
+					for _, payload := range writes {
+						raw, err := json.Marshal(payload)
+						require.NoError(t, err)
+						require.Equal(t, expected, gjson.GetBytes(raw, "client_metadata.x-codex-installation-id").String())
+					}
+				}
+			}
+			if !tc.session {
+				_, routed, route, routeErr := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(42, "another conversation"), account, nil)
+				require.NoError(t, routeErr)
+				require.Equal(t, routeID, route.id, "HTTP and WS share the account route")
+				if tc.fingerprint {
+					require.Equal(t, headers[len(headers)-1].Get("x-codex-installation-id"), route.fingerprint)
+				}
+				require.Equal(t, proxies[len(proxies)-1], routed.Proxy.URL())
+				route.finish(nil, nil)
+			}
 			if !tc.wantRotation {
 				require.Equal(t, []string{firstProxy.URL()}, proxies)
 				statuses := GetOpenAIFirstServeStatuses(account.ID)
@@ -291,6 +353,11 @@ func TestFirstServeIngressRotation(t *testing.T) {
 			payload, err := json.Marshal(secondConn.lastWrite)
 			secondConn.mu.Unlock()
 			require.NoError(t, err)
+			require.Equal(t, routeID, gjson.GetBytes(payload, "prompt_cache_key").String())
+			if tc.missingParent {
+				require.Equal(t, "resp_a", gjson.GetBytes(payload, "previous_response_id").String())
+				return
+			}
 			require.False(t, gjson.GetBytes(payload, "previous_response_id").Exists())
 			require.Equal(t, int64(3), gjson.GetBytes(payload, "input.#").Int())
 			require.Equal(t, "question A", gjson.GetBytes(payload, "input.0.content").String())

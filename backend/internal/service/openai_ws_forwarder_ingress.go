@@ -84,6 +84,13 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return errors.New("account is nil")
 	}
 	var firstServe *openAIFirstServeState
+	var firstServeRoute *openAIFirstServeHTTPLease
+	routeOptions := openAIFirstServeRouteOptions{fallbackScope: "ws:" + generateRequestID(), webSocket: true}
+	defer func() {
+		if firstServeRoute != nil {
+			firstServeRoute.release()
+		}
+	}()
 	defer func() {
 		if account.IsOpenAIFirstServe() && firstServe == nil && returnErr != nil {
 			status := newOpenAIFirstServeState(account, "", time.Now())
@@ -94,17 +101,17 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if account.IsOpenAIFirstServe() {
 		scoped := *account
 		account = &scoped
-		if err := validateOpenAIFirstServe(account); err != nil {
+		if err := validateOpenAIFirstServeRouting(account); err != nil {
 			return err
 		}
 		if s.cfg == nil || !s.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled {
 			return fmt.Errorf("账号 %s：首服模式需要开启 gateway.openai_ws.mode_router_v2_enabled", account.Name)
 		}
-		proxy, err := selectOpenAIFirstServeProxy(ctx, account, 0)
+		var err error
+		_, account, firstServeRoute, err = s.prepareFirstServeRoute(ctx, c, account, firstClientMessage, routeOptions)
 		if err != nil {
 			return err
 		}
-		account.Proxy, account.ProxyID, account.proxyGroupResolved = proxy, &proxy.ID, true
 	} else if err := resolveDefaultProxyGroupAccount(ctx, account); err != nil {
 		return err
 	}
@@ -901,7 +908,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	acquireTurnLease = func(turn int, preferred string, forcePreferredConn bool, forceNewConn bool) (*openAIWSConnLease, error) {
 		req := cloneOpenAIWSAcquireRequest(baseAcquireReq)
 		req.PreferredConnID = strings.TrimSpace(preferred)
-		req.ForcePreferredConn = forcePreferredConn || (firstServeMode && req.PreferredConnID != "")
+		req.ForcePreferredConn = forcePreferredConn
+		if firstServeRoute != nil {
+			// A stale pooled connection must not pin the account to its old IP.
+			req.ForcePreferredConn = false
+			applyFirstServeHeaders(req.Headers, firstServeRoute)
+		}
 		// dedicated 模式下每次获取均新建连接，避免跨会话复用残留上下文；
 		// 上游读写失败后的重试同样新建，避免再拿到同批陈旧的空闲连接。
 		req.ForceNewConn = dedicatedMode || forceNewConn || (firstServeMode && req.PreferredConnID == "")
@@ -969,19 +981,18 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if firstServe == nil && lease.conn.firstServe != nil && lease.conn.firstServe.scope == firstServeScope {
 				firstServe = lease.conn.firstServe
 				firstServe.status.Active = true
-				if firstServe.proxy != nil {
-					account.Proxy = firstServe.proxy
-					id := firstServe.proxy.ID
-					account.ProxyID = &id
-					baseAcquireReq.ProxyURL = firstServe.proxy.URL()
-				}
 			}
 			if firstServe == nil {
 				firstServe = newOpenAIFirstServeState(account, connID, time.Now())
 				firstServe.scope = firstServeScope
+				firstServe.fingerprint = lease.conn.handshakeCompatibility.codexInstallationID
 			} else if firstServe.status.ConnID != connID {
 				firstServe.bind(account.Proxy, connID, time.Now())
+				firstServe.fingerprint = lease.conn.handshakeCompatibility.codexInstallationID
 			}
+			firstServeRoute.entry.mu.Lock()
+			firstServe.status.ExpiresAt = firstServeRoute.entry.state.status.ExpiresAt
+			firstServeRoute.entry.mu.Unlock()
 			lease.conn.firstServe = firstServe
 		}
 		if handshakeTurnState := strings.TrimSpace(lease.HandshakeHeader(openAIWSTurnStateHeader)); handshakeTurnState != "" {
@@ -1437,7 +1448,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	currentTurnReplayInput := []json.RawMessage(nil)
 	currentTurnReplayInputExists := false
 	skipBeforeTurn := false
-	firstServeChecked := false
 	hasCurrentOrReplayFunctionCallOutput := func(payload []byte) bool {
 		if openAIWSRawPayloadHasToolCallOutput(payload) {
 			return true
@@ -1745,40 +1755,44 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 			}
 		}
-		if firstServe != nil && firstServe.due(time.Now()) {
-			replay, safe := firstServe.replay(currentPayload)
-			if !safe {
-				firstServe.publish("context_incomplete", time.Now())
-			} else {
-				nextProxy, proxyErr := selectOpenAIFirstServeProxy(ctx, account, firstServe.status.ProxyID)
-				if proxyErr != nil {
-					firstServe.retryAt = time.Now().Add(firstServe.status.Config.cooldown())
-					firstServe.publish("proxy_unavailable", time.Now())
-				} else {
-					// End only the upstream lease. The downstream session and billing turn stay intact.
-					if stateStore != nil {
-						stateStore.DeleteResponseConn(firstServe.lastID)
-						if bound, ok := stateStore.GetSessionConn(groupID, sessionHash); ok && bound == sessionConnID {
-							stateStore.DeleteSessionConn(groupID, sessionHash)
-						}
-						if saved, ok := stateStore.GetSessionTurnState(groupID, sessionHash); ok && saved == turnState {
-							stateStore.DeleteSessionTurnState(groupID, sessionHash)
-						}
-					}
-					resetSessionLease(true)
-					account.Proxy = nextProxy
-					proxyID := nextProxy.ID
-					account.ProxyID = &proxyID
-					baseAcquireReq.ProxyURL = nextProxy.URL()
-					baseAcquireReq.Headers.Del(openAIWSTurnStateHeader)
-					turnState = ""
-					currentPayload = replay
-					currentPayloadBytes = len(replay)
+		if firstServeRoute != nil {
+			_, routedAccount, route, routeErr := s.prepareFirstServeRoute(ctx, c, account, firstClientMessage, routeOptions)
+			if routeErr != nil {
+				return routeErr
+			}
+			firstServeRoute.release()
+			firstServeRoute = route
+			changed := firstServe != nil && (firstServe.status.ProxyID != routedAccount.Proxy.ID || firstServe.fingerprint != route.fingerprint)
+			account = routedAccount
+			baseAcquireReq.Account = account
+			baseAcquireReq.ProxyURL = account.Proxy.URL()
+			if changed {
+				// Preserve server continuation when full local replay is unavailable.
+				// Context completeness no longer delays the fixed IP rotation.
+				if replay, safe := firstServe.replay(currentPayload); safe {
+					currentPayload, currentPayloadBytes = replay, len(replay)
 					currentPreviousResponseID = ""
-					firstServe.attempts++
-					firstServe.status.Rotations++
-					logOpenAIWSModeInfo("first_serve_rotate account_id=%d turn=%d proxy_id=%d", account.ID, turn, proxyID)
 				}
+				if stateStore != nil {
+					stateStore.DeleteResponseConn(firstServe.lastID)
+					if bound, ok := stateStore.GetSessionConn(groupID, sessionHash); ok && bound == sessionConnID {
+						stateStore.DeleteSessionConn(groupID, sessionHash)
+					}
+					stateStore.DeleteSessionTurnState(groupID, sessionHash)
+				}
+				resetSessionLease(true)
+				baseAcquireReq.Headers.Del(openAIWSTurnStateHeader)
+				turnState = ""
+				firstServe.status.Rotations++
+				logOpenAIWSModeInfo("first_serve_rotate account_id=%d turn=%d proxy_id=%d", account.ID, turn, account.Proxy.ID)
+			}
+			if firstServe != nil {
+				route.entry.mu.Lock()
+				firstServe.status.ExpiresAt = route.entry.state.status.ExpiresAt
+				if route.entry.state.status.Reason == "proxy_unavailable" {
+					firstServe.publish("proxy_unavailable", time.Now())
+				}
+				route.entry.mu.Unlock()
 			}
 		}
 		forcePreferredConn := isStrictAffinityTurn(currentPayload)
@@ -1795,13 +1809,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				unpinSessionConn(sessionConnID)
 			}
 		}
-		if firstServe != nil && !firstServeChecked {
-			firstServeChecked = true
-			if firstServe.due(time.Now()) {
-				skipBeforeTurn = true
-				continue
-			}
+
+		if firstServe != nil && (firstServe.status.ProxyID != account.Proxy.ID || firstServe.fingerprint != firstServeRoute.fingerprint) {
+			// A reconnect may recover history from a lease on the previous IP.
+			// Rotate at the next loop boundary before sending anything upstream.
+			skipBeforeTurn = true
+			continue
 		}
+
 		shouldPreflightPing := turn > 1 && sessionLease != nil && sessionLease.SupportsIdlePingWithoutReader() && turnRetry == 0
 		if shouldPreflightPing && openAIWSIngressPreflightPingIdle > 0 && !lastTurnFinishedAt.IsZero() {
 			if time.Since(lastTurnFinishedAt) < openAIWSIngressPreflightPingIdle {
@@ -1932,6 +1947,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 		}
 
+		if firstServeRoute != nil {
+			var routeErr error
+			currentPayload, routeErr = applyFirstServeBody(currentPayload, firstServeRoute)
+			if routeErr != nil {
+				return routeErr
+			}
+			currentPayloadBytes = len(currentPayload)
+		}
 		if firstServe != nil {
 			firstServe.input(currentPayload)
 		}

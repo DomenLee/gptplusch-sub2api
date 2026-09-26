@@ -603,7 +603,12 @@ func (s *OpenAIGatewayService) ForwardImages(
 	body []byte,
 	parsed *OpenAIImagesRequest,
 	channelMappedModel string,
-) (*OpenAIForwardResult, error) {
+) (firstServeResult *OpenAIForwardResult, firstServeErr error) {
+	ctx, account, firstServe, prepareErr := s.prepareFirstServeHTTP(ctx, c, account, body)
+	if prepareErr != nil {
+		return nil, prepareErr
+	}
+	defer func() { firstServe.finish(firstServeResult, firstServeErr) }()
 	if err := resolveDefaultProxyGroupAccount(ctx, account); err != nil {
 		return nil, err
 	}

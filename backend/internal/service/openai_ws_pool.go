@@ -776,6 +776,18 @@ func (c *openAIWSConn) matchesHandshakeCompatibility(compatibility openAIWSHands
 	return c != nil && c.handshakeCompatibility == compatibility
 }
 
+// A preferred first-serve connection can supply its private replay history
+// after fingerprint rotation. Ingress must replace it before sending a turn.
+// All other handshake fields and the tenant/session scope still have to match.
+func (c *openAIWSConn) matchesFirstServeResume(compatibility openAIWSHandshakeCompatibilityKey) bool {
+	if c == nil || compatibility.firstServeScope == "" {
+		return false
+	}
+	previous := c.handshakeCompatibility
+	previous.codexInstallationID = compatibility.codexInstallationID
+	return previous == compatibility
+}
+
 func (c *openAIWSConn) matchesRoutingAffinity(routingAffinity string) bool {
 	return c != nil && c.routingAffinity == routingAffinity
 }
@@ -1271,7 +1283,7 @@ retryAcquire:
 		}
 
 		if preferredConnID != "" {
-			if conn, ok := ap.conns[preferredConnID]; ok && conn.matchesHandshakeCompatibility(compatibility) && conn.tryAcquire() {
+			if conn, ok := ap.conns[preferredConnID]; ok && (conn.matchesHandshakeCompatibility(compatibility) || conn.matchesFirstServeResume(compatibility)) && conn.tryAcquire() {
 				connPick := time.Since(pickStartedAt)
 				p.recordConnPickDuration(connPick)
 				ap.mu.Unlock()

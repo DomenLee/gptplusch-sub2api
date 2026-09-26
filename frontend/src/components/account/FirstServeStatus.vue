@@ -17,11 +17,7 @@
         {{ t('admin.accounts.openai.firstServeSessionMissing', { name: accountName }) }}
       </p>
       <p :class="warning(row.reason) ? 'text-amber-700 dark:text-amber-400' : 'text-gray-600 dark:text-gray-300'" :role="warning(row.reason) ? 'alert' : undefined">
-        {{ t(`admin.accounts.openai.firstServeReasons.${reasonKey(row.reason)}`, {
-          threshold: row.config?.ttft_seconds ?? 15,
-          switches: row.config?.max_switches ?? 3,
-          cooldown: row.config?.cooldown_seconds ?? 60
-        }) }}
+        {{ t(`admin.accounts.openai.firstServeReasons.${reasonKey(row.reason)}`) }}
       </p>
       <p class="text-gray-500">
         {{ t('admin.accounts.openai.firstServeMetrics', {

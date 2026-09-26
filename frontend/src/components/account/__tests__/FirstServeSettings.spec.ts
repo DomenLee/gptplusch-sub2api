@@ -37,7 +37,7 @@ describe('FirstServeSettings', () => {
     expect(wrapper.props('proxyGroupId')).toBe(20)
     await wrapper.get('[data-testid="first-serve-group"]').setValue('')
     expect(wrapper.props('proxyGroupId')).toBeNull()
-    expect(wrapper.vm.validate()).toBe(false)
+    expect(wrapper.vm.validate()).toBe(true)
     wrapper.unmount()
   })
 
@@ -51,15 +51,13 @@ describe('FirstServeSettings', () => {
     wrapper.unmount()
   })
 
-  it('opens configuration and shows the account error by the switch when no suitable group exists', async () => {
+  it('keeps configuration usable when imports have no proxy group yet', async () => {
     const wrapper = render(readFirstServeConfig(), { enabled: false, proxyGroupId: null, proxyGroups: [groups[1]!] })
     await wrapper.get('[role="switch"]').trigger('click')
     expect(wrapper.emitted('update:proxyGroupId')).toBeUndefined()
-    expect(wrapper.vm.validate()).toBe(false)
+    expect(wrapper.vm.validate()).toBe(true)
     expect((wrapper.get('[data-testid="first-serve-config"]').element as HTMLDetailsElement).open).toBe(true)
-    const alert = wrapper.get('[role="alert"]')
-    expect(alert.text()).toContain('Account A')
-    expect(alert.element.nextElementSibling?.getAttribute('data-testid')).toBe('first-serve-config')
+    expect(wrapper.get('[role="alert"]').text()).toContain('Account A')
     wrapper.unmount()
   })
 
@@ -80,31 +78,35 @@ describe('FirstServeSettings', () => {
     expect(readFirstServeConfig({ openai_first_serve: { reuse_scope: 'session' } }).reuse_scope).toBe('session')
   })
 
+  it('defaults to a 240 second IP rotation interval', () => {
+    expect(readFirstServeConfig().rotate_seconds).toBe(240)
+    expect(readFirstServeConfig({ openai_first_serve: { rotate_seconds: 600 } }).rotate_seconds).toBe(600)
+  })
+
   it('keeps configuration collapsed and preserves it when the switch is turned off and back on', async () => {
     const wrapper = render()
     expect(wrapper.get('[role="switch"]').attributes('aria-checked')).toBe('true')
     expect((wrapper.get('[data-testid="first-serve-config"]').element as HTMLDetailsElement).open).toBe(false)
-    await wrapper.get('[data-testid="first-serve-ttl_minutes"]').setValue('12')
+    await wrapper.get('[data-testid="first-serve-rotate_seconds"]').setValue('600')
     await wrapper.get('[role="switch"]').trigger('click')
     expect(wrapper.find('[data-testid="first-serve-config"]').exists()).toBe(false)
     expect(wrapper.vm.validate()).toBe(true)
     await wrapper.get('[role="switch"]').trigger('click')
     expect((wrapper.get('[data-testid="first-serve-config"]').element as HTMLDetailsElement).open).toBe(false)
-    expect(wrapper.props('modelValue').ttl_minutes).toBe(12)
+    expect(wrapper.props('modelValue').rotate_seconds).toBe(600)
     wrapper.unmount()
   })
 
   it('opens collapsed fields for validation failures and native invalid events', async () => {
-    const wrapper = render({ ...readFirstServeConfig(), cooldown_seconds: 0 })
+    const wrapper = render({ ...readFirstServeConfig(), rotate_seconds: 0 })
     expect(wrapper.vm.validate()).toBe(false)
     expect((wrapper.get('[data-testid="first-serve-config"]').element as HTMLDetailsElement).open).toBe(true)
     expect(wrapper.get('[role="alert"]').text()).toContain('Account A')
     await wrapper.setProps({ enabled: false })
     expect(wrapper.find('[role="alert"]').exists()).toBe(false)
     await wrapper.setProps({ enabled: true })
-    await wrapper.get('[data-testid="first-serve-cooldown_seconds"]').trigger('invalid')
+    await wrapper.get('[data-testid="first-serve-rotate_seconds"]').trigger('invalid')
     expect((wrapper.get('[data-testid="first-serve-config"]').element as HTMLDetailsElement).open).toBe(true)
-    expect((wrapper.findAll('details')[1].element as HTMLDetailsElement).open).toBe(true)
     wrapper.unmount()
   })
 
@@ -129,13 +131,13 @@ describe('FirstServeSettings', () => {
 
   it('validates custom timing values and never treats an empty selected list as all proxies', async () => {
     const wrapper = render()
-    await wrapper.get('[data-testid="first-serve-ttft_seconds"]').setValue('4')
-    expect(wrapper.props('modelValue').ttft_seconds).toBe(4)
+    await wrapper.get('[data-testid="first-serve-rotate_seconds"]').setValue('600')
+    expect(wrapper.props('modelValue').rotate_seconds).toBe(600)
     expect(wrapper.vm.validate()).toBe(true)
-    await wrapper.get('[data-testid="first-serve-cooldown_seconds"]').setValue('0')
+    await wrapper.get('[data-testid="first-serve-rotate_seconds"]').setValue('0')
     expect(wrapper.vm.validate()).toBe(false)
-    expect(wrapper.get('[role="alert"]').text()).toContain('cooldown_seconds')
-    await wrapper.get('[data-testid="first-serve-cooldown_seconds"]').setValue('10')
+    expect(wrapper.get('[role="alert"]').text()).toContain('rotate_seconds')
+    await wrapper.get('[data-testid="first-serve-rotate_seconds"]').setValue('10')
     await wrapper.get('[data-testid="first-serve-proxy-mode"]').setValue('selected')
     expect(wrapper.vm.validate()).toBe(false)
     await wrapper.get('[data-testid="first-serve-proxy-mode"]').setValue('all')

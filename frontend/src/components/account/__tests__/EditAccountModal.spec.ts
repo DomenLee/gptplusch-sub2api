@@ -1497,7 +1497,7 @@ describe('EditAccountModal', () => {
   })
 
   it('saves the default first serve group and clears the previous single proxy binding', async () => {
-    const account = { ...buildOpenAISetupTokenAccount(), proxy_id: 99 }
+    const account = { ...buildOpenAISetupTokenAccount(), proxy_id: 99, extra: { openai_passthrough: true } }
     updateAccountMock.mockReset().mockResolvedValue(account)
     checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     const wrapper = mountModal(account)
@@ -1508,38 +1508,69 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
     expect(updateAccountMock.mock.calls[0]?.[1]?.proxy_group_id).toBe(12)
     expect(updateAccountMock.mock.calls[0]?.[1]).not.toHaveProperty('proxy_id')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.codex_fingerprint_mode).toBe('full')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_passthrough).toBe(true)
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_oauth_responses_websockets_v2_mode).toBe('first_serve')
     wrapper.unmount()
   })
 
-  it('saves first serve mode with its proxy group and rejects a missing group', async () => {
+  it('preserves setup-token fingerprint and passthrough settings when saving first serve', async () => {
+    const account = { ...buildOpenAISetupTokenAccount(), proxy_group_id: 12, extra: {
+      openai_oauth_responses_websockets_v2_mode: 'first_serve',
+      codex_fingerprint_mode: 'full',
+      openai_passthrough: true
+    } }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.codex_fingerprint_mode).toBe('full')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_passthrough).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('persists an explicit fingerprint off after enabling first serve without enabling passthrough', async () => {
+    const account = buildOpenAIOAuthParentAccount()
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="first-serve-toggle"]').trigger('click')
+    const fingerprint = wrapper.get('[data-testid="edit-codex-fingerprint-mode-select"]')
+    expect((fingerprint.element as HTMLSelectElement).value).toBe('full')
+    await fingerprint.setValue('off')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.codex_fingerprint_mode).toBe('off')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_passthrough).not.toBe(true)
+    wrapper.unmount()
+  })
+
+  it('saves first serve mode with its proxy group and allows pending group configuration', async () => {
     const account = { ...buildOpenAISetupTokenAccount(), proxy_group_id: 12 }
     updateAccountMock.mockReset().mockResolvedValue(account)
     checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     const wrapper = mountModal(account)
     expect(wrapper.get('[data-testid="first-serve-settings"]').element.previousElementSibling?.getAttribute('data-testid')).toBe('temp-unschedulable-settings')
     await wrapper.get('[data-testid="first-serve-toggle"]').trigger('click')
-    await wrapper.get('[data-testid="first-serve-ttl_minutes"]').setValue('45')
-    await wrapper.get('[data-testid="first-serve-ttft_seconds"]').setValue('8')
-    await wrapper.get('[data-testid="first-serve-max_switches"]').setValue('5')
-    await wrapper.get('[data-testid="first-serve-cooldown_seconds"]').setValue('20')
+    await wrapper.get('[data-testid="first-serve-rotate_seconds"]').setValue('600')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_oauth_responses_websockets_v2_mode).toBe('first_serve')
     expect(updateAccountMock.mock.calls[0]?.[1]?.proxy_group_id).toBe(12)
     const config = updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_first_serve
-    expect(config).toEqual({ reuse_scope: 'account', ttl_minutes: 45, ttft_seconds: 8, max_switches: 5, cooldown_seconds: 20, proxy_mode: 'all', proxy_ids: [] })
+    expect(config).toEqual({ reuse_scope: 'account', rotate_seconds: 600, proxy_mode: 'all', proxy_ids: [] })
     await wrapper.setProps({ account: { ...account, extra: { openai_oauth_responses_websockets_v2_mode: 'first_serve', openai_first_serve: config } } })
-    expect((wrapper.get('[data-testid="first-serve-ttl_minutes"]').element as HTMLInputElement).value).toBe('45')
+    expect((wrapper.get('[data-testid="first-serve-rotate_seconds"]').element as HTMLInputElement).value).toBe('600')
     await wrapper.setProps({ account: { ...account, id: 999, extra: { openai_oauth_responses_websockets_v2_mode: 'first_serve' } } })
-    expect((wrapper.get('[data-testid="first-serve-ttl_minutes"]').element as HTMLInputElement).value).toBe('30')
+    expect((wrapper.get('[data-testid="first-serve-rotate_seconds"]').element as HTMLInputElement).value).toBe('240')
     wrapper.unmount()
 
     updateAccountMock.mockReset()
     const missing = mountModal(buildOpenAISetupTokenAccount())
     await missing.get('[data-testid="first-serve-toggle"]').trigger('click')
     await missing.get('form#edit-account-form').trigger('submit.prevent')
-    expect(updateAccountMock).not.toHaveBeenCalled()
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
     missing.unmount()
   })
 

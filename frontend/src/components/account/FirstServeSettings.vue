@@ -20,6 +20,7 @@
     </div>
     <template v-if="enabled">
       <p v-if="issue" role="alert" class="text-sm text-red-600 dark:text-red-400">{{ issueText }}</p>
+      <p v-else-if="!proxyGroupId" role="alert" class="text-sm text-amber-700 dark:text-amber-400">{{ t(`${prefix}.groupPending`, { name: accountName }) }}</p>
       <p v-else-if="availableCount < 2" role="status" class="text-xs text-amber-700 dark:text-amber-400">{{ t(`${prefix}.fewAvailable`, { name: accountName, count: availableCount }) }}</p>
       <details
         ref="configPanel"
@@ -41,7 +42,7 @@
             <span class="input-hint">{{ t(`${prefix}.scopeHint`) }}</span>
           </label>
           <div class="grid gap-4 sm:grid-cols-2">
-            <label v-for="field in firstServeFields.slice(0, 2)" :key="field.key" class="block">
+            <label v-for="field in firstServeFields" :key="field.key" class="block">
               <span class="input-label">{{ t(`${prefix}.${field.key}`) }}</span>
               <input :value="modelValue[field.key]" :data-testid="`first-serve-${field.key}`" type="number" class="input" required :min="field.min" :max="field.max" step="1" @input="set(field.key, Number(($event.target as HTMLInputElement).value))" />
               <span class="input-hint">{{ t(`${prefix}.range`, { min: field.min, max: field.max }) }}</span>
@@ -78,17 +79,6 @@
               </div>
             </div>
           </div>
-          <details ref="advanced">
-            <summary class="cursor-pointer text-sm font-medium">{{ t(`${prefix}.advanced`) }}</summary>
-            <p class="input-hint mt-2">{{ t(`${prefix}.retryHint`) }}</p>
-            <div class="mt-3 grid gap-4 sm:grid-cols-2">
-              <label v-for="field in firstServeFields.slice(2)" :key="field.key" class="block">
-                <span class="input-label">{{ t(`${prefix}.${field.key}`) }}</span>
-                <input :value="modelValue[field.key]" :data-testid="`first-serve-${field.key}`" type="number" class="input" required :min="field.min" :max="field.max" step="1" @input="set(field.key, Number(($event.target as HTMLInputElement).value))" />
-                <span class="input-hint">{{ t(`${prefix}.range`, { min: field.min, max: field.max }) }}</span>
-              </label>
-            </div>
-          </details>
           <slot v-if="expanded" />
         </div>
       </details>
@@ -119,7 +109,6 @@ const { t } = useI18n()
 const prefix = 'admin.accounts.openai.firstServeSettings'
 const panel = ref<HTMLElement>()
 const configPanel = ref<HTMLDetailsElement>()
-const advanced = ref<HTMLDetailsElement>()
 const expanded = ref(false)
 watch(() => props.enabled, () => { expanded.value = false })
 watch([() => props.enabled, () => props.proxyGroups], () => {
@@ -162,7 +151,6 @@ function open() {
   expanded.value = true
   // Open immediately so native form validation can focus collapsed inputs.
   if (configPanel.value) configPanel.value.open = true
-  if (advanced.value) advanced.value.open = true
   panel.value?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
 }
 function validate() {

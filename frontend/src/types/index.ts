@@ -1694,6 +1694,7 @@ export interface CodexSessionImportRequest {
   notes?: string | null
   group_ids?: number[]
   proxy_id?: number | null
+  proxy_group_id?: number | null
   concurrency?: number
   priority?: number
   rate_multiplier?: number
@@ -1713,6 +1714,7 @@ export interface OpenAICodexPATCreateRequest {
   notes?: string | null
   group_ids?: number[]
   proxy_id?: number | null
+  proxy_group_id?: number | null
   concurrency?: number
   priority?: number
   rate_multiplier?: number

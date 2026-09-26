@@ -14,7 +14,10 @@ import (
 
 // Stored in accounts.extra; omitted reuse scope shares the account HTTP combination.
 type OpenAIFirstServeConfig struct {
-	ReuseScope      string  `json:"reuse_scope"`
+	ReuseScope    string `json:"reuse_scope"`
+	RotateSeconds int    `json:"rotate_seconds"`
+	// Legacy fields are retained for JSON compatibility. They no longer affect
+	// first serve rotation decisions.
 	TTLMinutes      int     `json:"ttl_minutes"`
 	TTFTSeconds     int     `json:"ttft_seconds"`
 	MaxSwitches     int     `json:"max_switches"`
@@ -24,7 +27,7 @@ type OpenAIFirstServeConfig struct {
 }
 
 func defaultOpenAIFirstServeConfig() OpenAIFirstServeConfig {
-	return OpenAIFirstServeConfig{ReuseScope: "account", TTLMinutes: 30, TTFTSeconds: 15, MaxSwitches: 3, CooldownSeconds: 60, ProxyMode: "all", ProxyIDs: []int64{}}
+	return OpenAIFirstServeConfig{ReuseScope: "account", RotateSeconds: 240, TTLMinutes: 30, TTFTSeconds: 15, MaxSwitches: 3, CooldownSeconds: 0, ProxyMode: "all", ProxyIDs: []int64{}}
 }
 
 func (a *Account) firstServeConfig() (OpenAIFirstServeConfig, error) {
@@ -61,10 +64,11 @@ func (a *Account) firstServeConfig() (OpenAIFirstServeConfig, error) {
 		name            string
 		value, min, max int
 	}{
+		{"rotate_seconds", cfg.RotateSeconds, 1, 86400},
 		{"ttl_minutes", cfg.TTLMinutes, 1, 1440},
 		{"ttft_seconds", cfg.TTFTSeconds, 1, 300},
 		{"max_switches", cfg.MaxSwitches, 1, 20},
-		{"cooldown_seconds", cfg.CooldownSeconds, 1, 3600},
+		{"cooldown_seconds", cfg.CooldownSeconds, 0, 3600},
 	} {
 		if field.value < field.min || field.value > field.max {
 			return invalid(fmt.Sprintf("%s 范围为 %d–%d", field.name, field.min, field.max))
@@ -95,9 +99,8 @@ func (a *Account) firstServeConfig() (OpenAIFirstServeConfig, error) {
 	return cfg, nil
 }
 
-func (c OpenAIFirstServeConfig) ttl() time.Duration { return time.Duration(c.TTLMinutes) * time.Minute }
-func (c OpenAIFirstServeConfig) cooldown() time.Duration {
-	return time.Duration(c.CooldownSeconds) * time.Second
+func (c OpenAIFirstServeConfig) ttl() time.Duration {
+	return time.Duration(c.RotateSeconds) * time.Second
 }
 func (c OpenAIFirstServeConfig) allows(id int64) bool {
 	return c.ProxyMode == "all" || slices.Contains(c.ProxyIDs, id)
@@ -135,4 +138,52 @@ func validateOpenAIFirstServeProxies(ctx context.Context, account *Account) erro
 		}
 	}
 	return nil
+}
+
+// Mirror the create form's default group selection for API and file imports.
+// If no group is ready, retain the enabled setting so it can be completed later.
+func assignDefaultFirstServeProxyGroup(ctx context.Context, account *Account) error {
+	if !account.IsOpenAIFirstServe() || (account.ProxyGroupID != nil && *account.ProxyGroupID > 0) {
+		return nil
+	}
+	defaultProxyGroupResolver.RLock()
+	reader, ok := defaultProxyGroupResolver.resolver.(interface {
+		ListAll(context.Context) ([]ProxyGroup, error)
+	})
+	defaultProxyGroupResolver.RUnlock()
+	if !ok {
+		return nil
+	}
+	groups, err := reader.ListAll(ctx)
+	if err != nil {
+		return err
+	}
+	cfg, err := account.firstServeConfig()
+	if err != nil {
+		return err
+	}
+	for _, group := range groups {
+		if group.Status != ProxyGroupStatusActive || group.AvailableMemberCount < 2 {
+			continue
+		}
+		if account.ProxyID != nil && *account.ProxyID > 0 && !slices.Contains(group.ProxyIDs, *account.ProxyID) {
+			continue
+		}
+		if cfg.ProxyMode == "selected" && !allFirstServeProxiesInGroup(cfg.ProxyIDs, group.ProxyIDs) {
+			continue
+		}
+		id := group.ID
+		account.ProxyGroupID, account.ProxyID, account.Proxy = &id, nil, nil
+		return nil
+	}
+	return nil
+}
+
+func allFirstServeProxiesInGroup(ids, members []int64) bool {
+	for _, id := range ids {
+		if !slices.Contains(members, id) {
+			return false
+		}
+	}
+	return true
 }
