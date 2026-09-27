@@ -622,10 +622,15 @@ const firstServeSeconds = (row: AdminUsageLog): number | string => {
   return typeof seconds === 'number' && Number.isFinite(seconds) && seconds >= 0 ? Math.floor(seconds) : '—'
 }
 
-const firstServeProxy = (row: AdminUsageLog): string => row.first_serve_proxy_name?.trim() || t('usage.firstServeUnknownProxy')
+const firstServeProxy = (row: AdminUsageLog): string => {
+  const name = row.first_serve_proxy_name?.trim() || ''
+  const address = row.first_serve_proxy_address?.trim() || ''
+  if (name && address) return `${name} · ${address}`
+  return name || address || t('usage.firstServeUnknownProxy')
+}
 
 const hasFirstServeSnapshot = (row: AdminUsageLog): boolean =>
-  typeof row.first_serve_duration_seconds === 'number' || Boolean(row.first_serve_proxy_name?.trim())
+  typeof row.first_serve_duration_seconds === 'number' || Boolean(row.first_serve_proxy_name?.trim() || row.first_serve_proxy_address?.trim())
 
 const firstServeBadgeLabel = (row: AdminUsageLog): string => {
   if (!hasFirstServeSnapshot(row)) return t('usage.firstServeActiveLegacy')

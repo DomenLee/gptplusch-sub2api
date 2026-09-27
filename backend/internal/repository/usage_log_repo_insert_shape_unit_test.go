@@ -146,11 +146,13 @@ func TestPrepareUsageLogInsert_UpstreamRequestIDArgWiring(t *testing.T) {
 
 func TestUsageLogFirstServeSnapshotPersistsAndScans(t *testing.T) {
 	for _, active := range []bool{false, true} {
-		log := &service.UsageLog{UserID: 1, APIKeyID: 2, AccountID: 3, RequestID: "first-serve", Model: "gpt-5", FirstServeActive: active}
+		snapshot := &service.OpenAIFirstServeUsageSnapshot{DurationSeconds: 427, ProxyName: "日本 1", ProxyAddress: "1.2.3.4:8080"}
+		log := &service.UsageLog{UserID: 1, APIKeyID: 2, AccountID: 3, RequestID: "first-serve", Model: "gpt-5", FirstServeActive: active, FirstServeSnapshot: snapshot}
 		prepared := prepareUsageLogInsert(log)
-		idx := len(prepared.args) - 5
+		idx := len(prepared.args) - 6
 		require.Equal(t, "boolean", usageLogInsertArgTypes[idx])
 		require.Equal(t, active, prepared.args[idx])
+		require.Equal(t, "jsonb", usageLogInsertArgTypes[idx+1])
 		db, mock, err := sqlmock.New()
 		require.NoError(t, err)
 		values := append([]any{int64(1)}, prepared.args...)
@@ -158,6 +160,7 @@ func TestUsageLogFirstServeSnapshotPersistsAndScans(t *testing.T) {
 		stored, err := scanUsageLog(db.QueryRowContext(context.Background(), "SELECT "+usageLogSelectColumns))
 		require.NoError(t, err)
 		require.Equal(t, active, stored.FirstServeActive)
+		require.Equal(t, snapshot, stored.FirstServeSnapshot)
 		require.NoError(t, mock.ExpectationsWereMet())
 		mock.ExpectClose()
 		require.NoError(t, db.Close())

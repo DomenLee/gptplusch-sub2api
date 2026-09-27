@@ -66,7 +66,12 @@ func TestFirstServeHTTPReuseRotationAndIsolation(t *testing.T) {
 	require.Equal(t, copyA.ProxyID, copyB.ProxyID)
 	require.Equal(t, expiry, second.entry.state.status.ExpiresAt, "healthy requests do not renew TTL")
 	ms = 15001
-	second.finish(&OpenAIForwardResult{FirstTokenMs: &ms}, nil)
+	secondResult := &OpenAIForwardResult{FirstTokenMs: &ms}
+	second.finish(secondResult, nil)
+	require.NotNil(t, secondResult.FirstServeSnapshot)
+	require.Equal(t, "A", secondResult.FirstServeSnapshot.ProxyName)
+	require.Equal(t, "first.test:8080", secondResult.FirstServeSnapshot.ProxyAddress)
+	require.GreaterOrEqual(t, secondResult.FirstServeSnapshot.DurationSeconds, 0)
 	require.False(t, second.entry.state.due(time.Now()), "one slow request must not rotate")
 	for range 2 {
 		_, _, slow, slowErr := svc.prepareFirstServeHTTP(ctx, firstServeHTTPContext(1, "session"), a, body)

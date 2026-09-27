@@ -768,7 +768,7 @@ func UsageLogFromServiceAdmin(l *service.UsageLog) *AdminUsageLog {
 	}
 	usageLog := usageLogFromServiceUser(l)
 	usageLog.UpstreamEndpoint = l.UpstreamEndpoint
-	return &AdminUsageLog{
+	result := &AdminUsageLog{
 		UsageLog:                usageLog,
 		UpstreamModel:           l.UpstreamModel,
 		UpstreamReasoningEffort: adminUpstreamReasoningEffort(l),
@@ -783,6 +783,19 @@ func UsageLogFromServiceAdmin(l *service.UsageLog) *AdminUsageLog {
 		IPAddress:               l.IPAddress,
 		Account:                 AccountSummaryFromService(l.Account),
 	}
+	if snapshot := l.FirstServeSnapshot; snapshot != nil {
+		if value := strings.TrimSpace(snapshot.ProxyName); value != "" {
+			result.FirstServeProxyName = &value
+		}
+		if value := strings.TrimSpace(snapshot.ProxyAddress); value != "" {
+			result.FirstServeProxyAddress = &value
+		}
+		seconds := snapshot.DurationSeconds
+		if seconds >= 0 {
+			result.FirstServeDurationSeconds = &seconds
+		}
+	}
+	return result
 }
 
 func userFacingReasoningEffort(l *service.UsageLog) *string {

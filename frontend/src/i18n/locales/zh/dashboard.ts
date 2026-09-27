@@ -404,7 +404,7 @@ export default {
     sync: '同步',
     nativeCompactionV2: '压缩',
     firstServeActive: '首服-{seconds} s--{proxy}',
-    firstServeActiveHint: '本次流式请求复用了首服模式的路由组合；当前轮动已持续 {seconds} 秒，代理为 {proxy}。',
+    firstServeActiveHint: '本笔请求发生在首服组合第 {seconds} 秒，使用代理 {proxy}。',
     firstServeActiveLegacy: '首服生效中',
     firstServeActiveHintLegacy: '本次流式请求实际复用了首服模式的路由组合；当前节点没有可用的轮动快照。',
     firstServeUnknownProxy: '未知代理',

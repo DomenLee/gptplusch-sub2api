@@ -87,6 +87,7 @@ type openAIFirstServeHTTPLease struct {
 	resetContinuation bool                 // reject response IDs from before the captured generation
 	responses         *firstServeResponses // protected by entry.mu
 	turnID            string
+	snapshot          *OpenAIFirstServeUsageSnapshot
 	uses              *atomic.Uint64
 	applied           bool // protected by entry.mu
 	reused            bool // protected by entry.mu
@@ -249,6 +250,7 @@ func (s *OpenAIGatewayService) prepareFirstServeRoute(ctx context.Context, c *gi
 	}
 	state.publish(state.status.Reason, now)
 	l.id = state.status.ConnID
+	l.snapshot = firstServeUsageSnapshot(state, now)
 	l.resetContinuation = state.status.Rotations > 0
 	l.responses = entry.responses
 	l.turnID = uuid.NewString()
@@ -309,6 +311,7 @@ func (l *openAIFirstServeHTTPLease) finish(result *OpenAIForwardResult, err erro
 	defer l.entry.mu.Unlock()
 	if result != nil {
 		result.FirstServeActive = l.kind == "stream" && l.applied && l.reused
+		result.FirstServeSnapshot = cloneFirstServeUsageSnapshot(l.snapshot)
 	}
 	if result != nil && err == nil {
 		l.responses.add(strings.TrimSpace(result.ResponseID))

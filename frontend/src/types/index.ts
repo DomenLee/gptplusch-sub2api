@@ -1836,6 +1836,7 @@ export interface UsageLogAccountSummary {
 
 export interface AdminUsageLog extends UsageLog {
   first_serve_proxy_name?: string | null
+  first_serve_proxy_address?: string | null
   first_serve_duration_seconds?: number | null
   upstream_model?: string | null
   upstream_reasoning_effort?: string | null

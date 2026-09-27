@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +22,42 @@ const openAIFirstServeMaxReplay = 8 << 20
 // A healthy first token resets the consecutive slow-request count. Rotation
 // starts on the request after three consecutive samples above the threshold.
 const openAIFirstServeSlowRequestLimit = 3
+
+// OpenAIFirstServeUsageSnapshot is frozen when a request enters a first-serve
+// route. Usage history must not be rebuilt from the account's current route.
+type OpenAIFirstServeUsageSnapshot struct {
+	DurationSeconds int    `json:"duration_seconds"`
+	ProxyName       string `json:"proxy_name"`
+	ProxyAddress    string `json:"proxy_address"`
+}
+
+func firstServeUsageSnapshot(state *openAIFirstServeState, now time.Time) *OpenAIFirstServeUsageSnapshot {
+	if state == nil || state.status.StartedAt.IsZero() || state.proxy == nil {
+		return nil
+	}
+	seconds := int(now.Sub(state.status.StartedAt).Seconds())
+	if seconds < 0 {
+		seconds = 0
+	}
+	proxyName := strings.TrimSpace(state.proxy.Name)
+	proxyAddress := strings.TrimSpace(state.proxy.Host)
+	if state.proxy.Port > 0 {
+		proxyAddress = net.JoinHostPort(proxyAddress, strconv.Itoa(state.proxy.Port))
+	}
+	return &OpenAIFirstServeUsageSnapshot{
+		DurationSeconds: seconds,
+		ProxyName:       proxyName,
+		ProxyAddress:    proxyAddress,
+	}
+}
+
+func cloneFirstServeUsageSnapshot(snapshot *OpenAIFirstServeUsageSnapshot) *OpenAIFirstServeUsageSnapshot {
+	if snapshot == nil {
+		return nil
+	}
+	copy := *snapshot
+	return &copy
+}
 
 // Configuration is account scoped. Conversation history remains local to each
 // WebSocket connection; HTTP routing affinity can be shared explicitly.

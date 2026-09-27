@@ -678,9 +678,10 @@ type UsageLog struct {
 type AdminUsageLog struct {
 	UsageLog
 
-	// Current first-serve routing snapshot for the account, when available.
-	// These fields are intentionally admin-only and are not persisted usage data.
+	// Request-time first-serve routing snapshot, when available.
+	// These fields are intentionally admin-only and are persisted per request.
 	FirstServeProxyName       *string `json:"first_serve_proxy_name,omitempty"`
+	FirstServeProxyAddress    *string `json:"first_serve_proxy_address,omitempty"`
 	FirstServeDurationSeconds *int    `json:"first_serve_duration_seconds,omitempty"`
 
 	// UpstreamModel is the actual model sent to the upstream provider after mapping.

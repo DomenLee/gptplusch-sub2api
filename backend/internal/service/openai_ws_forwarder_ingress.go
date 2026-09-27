@@ -1060,6 +1060,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		var firstTokenMs *int
 		reqStream := openAIWSPayloadBoolFromRaw(payload, "stream", true)
 		firstServeStream := reqStream && !isExplicitOpenAICompactRequest(c, payload) && !isOpenAINativeCompactionV2(c)
+		var firstServeSnapshot *OpenAIFirstServeUsageSnapshot
+		if firstServe != nil && firstServeStream {
+			if firstServeRoute != nil {
+				firstServeRoute.entry.mu.Lock()
+				firstServeSnapshot = firstServeUsageSnapshot(firstServeRoute.entry.state, turnStart)
+				firstServeRoute.entry.mu.Unlock()
+			} else {
+				firstServeSnapshot = firstServeUsageSnapshot(firstServe, turnStart)
+			}
+		}
 		if firstServe != nil && firstServeStream {
 			firstServe.status.Requests++
 			firstServe.publish(firstServe.status.Reason, time.Now())
@@ -1333,6 +1343,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				imageCount := imageCounter.Count()
 				result := &OpenAIForwardResult{
 					RequestID:                     responseID,
+					FirstServeSnapshot:            cloneFirstServeUsageSnapshot(firstServeSnapshot),
 					Usage:                         usage,
 					Model:                         originalModel,
 					UpstreamModel:                 mappedModel,

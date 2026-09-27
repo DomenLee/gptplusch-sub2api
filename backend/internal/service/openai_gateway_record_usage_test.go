@@ -2991,6 +2991,7 @@ func TestRecordUsagePreservesFirstServeRequestSnapshot(t *testing.T) {
 				NativeCompactionV2: tc.compact,
 				Result: &OpenAIForwardResult{
 					Model: "gpt-5", Stream: tc.stream, FirstServeActive: tc.active,
+					FirstServeSnapshot: &OpenAIFirstServeUsageSnapshot{DurationSeconds: 427, ProxyName: "日本 1", ProxyAddress: "1.2.3.4:8080"},
 					Duration: time.Second, Usage: OpenAIUsage{InputTokens: 100, OutputTokens: 10},
 				},
 				APIKey: &APIKey{ID: 20, UserID: 21, Group: &Group{RateMultiplier: 1}},
@@ -3000,6 +3001,8 @@ func TestRecordUsagePreservesFirstServeRequestSnapshot(t *testing.T) {
 			}))
 			require.NotNil(t, logStub.lastLog)
 			require.Equal(t, tc.want, logStub.lastLog.FirstServeActive)
+			require.Equal(t, 427, logStub.lastLog.FirstServeSnapshot.DurationSeconds)
+			require.Equal(t, "1.2.3.4:8080", logStub.lastLog.FirstServeSnapshot.ProxyAddress)
 		})
 	}
 }

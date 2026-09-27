@@ -52,9 +52,13 @@ func TestUsageLogFromService_PreservesNativeCompactionAndStream(t *testing.T) {
 func TestUsageLogFromService_PreservesFirstServeSnapshot(t *testing.T) {
 	t.Parallel()
 	for _, active := range []bool{false, true} {
-		log := &service.UsageLog{FirstServeActive: active}
+		log := &service.UsageLog{FirstServeActive: active, FirstServeSnapshot: &service.OpenAIFirstServeUsageSnapshot{DurationSeconds: 427, ProxyName: "日本 1", ProxyAddress: "1.2.3.4:8080"}}
 		require.Equal(t, active, UsageLogFromService(log).FirstServeActive)
-		require.Equal(t, active, UsageLogFromServiceAdmin(log).FirstServeActive)
+		admin := UsageLogFromServiceAdmin(log)
+		require.Equal(t, active, admin.FirstServeActive)
+		require.Equal(t, 427, *admin.FirstServeDurationSeconds)
+		require.Equal(t, "日本 1", *admin.FirstServeProxyName)
+		require.Equal(t, "1.2.3.4:8080", *admin.FirstServeProxyAddress)
 	}
 }
 

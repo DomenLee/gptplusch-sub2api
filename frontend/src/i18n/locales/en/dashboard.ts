@@ -399,7 +399,7 @@ export default {
     sync: 'Sync',
     nativeCompactionV2: 'Compaction',
     firstServeActive: 'First serve-{seconds} s--{proxy}',
-    firstServeActiveHint: 'This streaming request reused a first-serve route; the current rotation has lasted {seconds} seconds through {proxy}.',
+    firstServeActiveHint: 'This request occurred at second {seconds} of the first-serve route, using proxy {proxy}.',
     firstServeActiveLegacy: 'First serve active',
     firstServeActiveHintLegacy: 'This streaming request reused a first-serve route; no current rotation snapshot is available on this gateway node.',
     firstServeUnknownProxy: 'Unknown proxy',
