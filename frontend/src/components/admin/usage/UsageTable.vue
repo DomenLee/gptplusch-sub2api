@@ -132,10 +132,10 @@
             <span
               v-if="row.first_serve_active"
               data-testid="first-serve-badge"
-              :title="t('usage.firstServeActiveHint')"
-              class="inline-flex items-center rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200"
+              :title="firstServeBadgeHint(row)"
+              class="inline-flex items-center rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900 dark:text-amber-200"
             >
-              {{ t('usage.firstServeActive') }}
+              {{ firstServeBadgeLabel(row) }}
             </span>
             <span
               v-if="row.native_compaction_v2"
@@ -616,6 +616,27 @@ const props = withDefaults(defineProps<Props>(), {
   showUpstreamEndpoint: true,
   flat: false
 })
+
+const firstServeSeconds = (row: AdminUsageLog): number | string => {
+  const seconds = row.first_serve_duration_seconds
+  return typeof seconds === 'number' && Number.isFinite(seconds) && seconds >= 0 ? Math.floor(seconds) : '—'
+}
+
+const firstServeProxy = (row: AdminUsageLog): string => row.first_serve_proxy_name?.trim() || t('usage.firstServeUnknownProxy')
+
+const hasFirstServeSnapshot = (row: AdminUsageLog): boolean =>
+  typeof row.first_serve_duration_seconds === 'number' || Boolean(row.first_serve_proxy_name?.trim())
+
+const firstServeBadgeLabel = (row: AdminUsageLog): string => {
+  if (!hasFirstServeSnapshot(row)) return t('usage.firstServeActiveLegacy')
+  return t('usage.firstServeActive', { seconds: firstServeSeconds(row), proxy: firstServeProxy(row) })
+}
+
+const firstServeBadgeHint = (row: AdminUsageLog): string => {
+  if (!hasFirstServeSnapshot(row)) return t('usage.firstServeActiveHintLegacy')
+  return t('usage.firstServeActiveHint', { seconds: firstServeSeconds(row), proxy: firstServeProxy(row) })
+}
+
 const emit = defineEmits<{
   userClick: [userID: number, email?: string]
   sort: [key: string, order: 'asc' | 'desc']

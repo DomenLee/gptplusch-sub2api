@@ -14,14 +14,15 @@ import (
 
 // Stored in accounts.extra; omitted reuse scope shares the account HTTP combination.
 type OpenAIFirstServeConfig struct {
-	ReuseScope    string `json:"reuse_scope"`
-	RotateSeconds int    `json:"rotate_seconds"`
-	// Legacy fields are retained for JSON compatibility. They no longer affect
-	// first serve rotation decisions.
-	TTLMinutes      int     `json:"ttl_minutes"`
+	ReuseScope string `json:"reuse_scope"`
+	// RotateSeconds controls the diagnostic lifetime/display period. It no
+	// longer triggers proxy rotation by itself.
+	RotateSeconds int `json:"rotate_seconds"`
+	TTLMinutes    int `json:"ttl_minutes"` // retained for JSON compatibility
+	// TTFTSeconds is the first-token threshold used by the slow-request policy.
 	TTFTSeconds     int     `json:"ttft_seconds"`
-	MaxSwitches     int     `json:"max_switches"`
-	CooldownSeconds int     `json:"cooldown_seconds"`
+	MaxSwitches     int     `json:"max_switches"`     // retained for compatibility
+	CooldownSeconds int     `json:"cooldown_seconds"` // retained for compatibility
 	ProxyMode       string  `json:"proxy_mode"`
 	ProxyIDs        []int64 `json:"proxy_ids"`
 }

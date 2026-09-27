@@ -214,8 +214,41 @@ func (h *UsageHandler) List(c *gin.Context) {
 	}
 
 	out := make([]dto.AdminUsageLog, 0, len(records))
+	firstServeSnapshots := make(map[int64]service.OpenAIFirstServeStatus)
+	firstServeSnapshotExists := make(map[int64]bool)
+	now := time.Now()
 	for i := range records {
-		out = append(out, *dto.UsageLogFromServiceAdmin(&records[i]))
+		row := dto.UsageLogFromServiceAdmin(&records[i])
+		if records[i].FirstServeActive && records[i].AccountID > 0 {
+			accountID := records[i].AccountID
+			if !firstServeSnapshotExists[accountID] {
+				firstServeSnapshotExists[accountID] = true
+				statuses := service.GetOpenAIFirstServeStatuses(accountID)
+				if len(statuses) > 0 {
+					selected := statuses[0]
+					for _, candidate := range statuses[1:] {
+						if candidate.Active && !selected.Active {
+							selected = candidate
+						}
+					}
+					firstServeSnapshots[accountID] = selected
+				}
+			}
+			if snapshot, ok := firstServeSnapshots[accountID]; ok {
+				if snapshot.ProxyName != "" {
+					proxyName := snapshot.ProxyName
+					row.FirstServeProxyName = &proxyName
+				}
+				if !snapshot.StartedAt.IsZero() {
+					seconds := int(now.Sub(snapshot.StartedAt).Seconds())
+					if seconds < 0 {
+						seconds = 0
+					}
+					row.FirstServeDurationSeconds = &seconds
+				}
+			}
+		}
+		out = append(out, *row)
 	}
 	response.Paginated(c, out, result.Total, page, pageSize)
 }

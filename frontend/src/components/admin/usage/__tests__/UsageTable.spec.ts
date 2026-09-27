@@ -58,7 +58,7 @@ const messages: Record<string, string> = {
   'usage.stream': 'Stream',
   'usage.sync': 'Sync',
   'usage.nativeCompactionV2': 'Compaction',
-  'usage.firstServeActive': '首服生效中',
+  'usage.firstServeActive': '首服-12 s--Proxy A',
   'admin.usage.billingModeToken': 'Token',
   'admin.usage.billingModePerRequest': 'Per request',
   'admin.usage.billingModeImage': 'Image',
@@ -134,7 +134,7 @@ describe('admin UsageTable tooltip', () => {
     const wrapper = mount(UsageTable, {
       props: {
         data: [
-          { ...baseImageRow, request_id: 'reused', stream: true, first_serve_active: true },
+          { ...baseImageRow, request_id: 'reused', stream: true, first_serve_active: true, first_serve_duration_seconds: 12, first_serve_proxy_name: 'Proxy A' },
           { ...baseImageRow, request_id: 'first-use', stream: true, first_serve_active: false },
           { ...baseImageRow, request_id: 'historical', stream: true, account: { extra: { openai_apikey_responses_websockets_v2_mode: 'first_serve' } } }
         ],
@@ -146,7 +146,7 @@ describe('admin UsageTable tooltip', () => {
       } }
     })
     expect(wrapper.findAll('[data-testid="first-serve-badge"]')).toHaveLength(1)
-    expect(wrapper.get('[data-testid="first-serve-badge"]').text()).toBe('首服生效中')
+    expect(wrapper.get('[data-testid="first-serve-badge"]').text()).toBe('首服-12 s--Proxy A')
     wrapper.unmount()
   })
 

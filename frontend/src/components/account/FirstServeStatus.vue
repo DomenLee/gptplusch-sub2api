@@ -22,8 +22,10 @@
       <p class="text-gray-500">
         {{ t('admin.accounts.openai.firstServeMetrics', {
           latency: row.first_token_ms == null ? '—' : (row.first_token_ms / 1000).toFixed(2),
-          expires: row.conn_id ? new Date(row.expires_at).toLocaleTimeString() : '—',
-          rotations: row.rotations
+          duration: rotationDuration(row),
+          proxy: row.proxy_name || '#' + row.proxy_id,
+          slow: row.slow_count,
+          pending: row.rotation_pending ? t('admin.accounts.openai.firstServePending') : ''
         }) }}
         <span v-if="!row.active"> · {{ t(row.transport === 'http' ? 'admin.accounts.openai.firstServeInactive' : 'admin.accounts.openai.firstServeEnded') }}</span>
       </p>
@@ -58,7 +60,13 @@ let disposed = false
 const reasons = ['observing', 'ready', 'slow', 'context_incomplete', 'proxy_unavailable', 'cooldown', 'connection_failed', 'non_stream', 'compact', 'ttft_unavailable', 'request_failed']
 const reasonKey = (reason: string) => reasons.includes(reason) ? reason : 'ttft_unavailable'
 
-const warning = (reason: string) => ['context_incomplete', 'proxy_unavailable', 'cooldown', 'connection_failed'].includes(reason)
+const warning = (reason: string) => ['slow', 'context_incomplete', 'proxy_unavailable', 'cooldown', 'connection_failed'].includes(reason)
+
+const rotationDuration = (row: FirstServeStatus) => {
+  const started = Date.parse(row.started_at || '')
+  if (!Number.isFinite(started)) return '—'
+  return Math.max(0, Math.floor((Date.now() - started) / 1000))
+}
 
 async function load() {
   if (disposed) return

@@ -14,14 +14,16 @@ func TestFirstServeCustomTimings(t *testing.T) {
 		"rotate_seconds": 120, "ttl_minutes": 30, "ttft_seconds": 4, "max_switches": 2, "cooldown_seconds": 10,
 	}}}
 	s := newOpenAIFirstServeState(a, "route", now)
+	for i := 0; i < openAIFirstServeSlowRequestLimit-1; i++ {
+		s.observe(60000, now.Add(time.Duration(i+1)*time.Second))
+		require.False(t, s.due(now))
+	}
 	s.observe(60000, now.Add(time.Minute))
-	require.False(t, s.due(now.Add(time.Minute)), "latency never triggers rotation")
+	require.True(t, s.due(now), "three consecutive slow samples request rotation")
 	require.Equal(t, now.Add(2*time.Minute), s.status.ExpiresAt)
-	require.True(t, s.due(now.Add(2*time.Minute)))
 	s.rotate(&Proxy{ID: 2}, now.Add(2*time.Minute))
-	require.Equal(t, "route", s.status.ConnID)
-	require.False(t, s.due(now.Add(239*time.Second)))
-	require.True(t, s.due(now.Add(240*time.Second)))
+	require.NotEqual(t, "route", s.status.ConnID)
+	require.False(t, s.due(now.Add(240*time.Second)))
 }
 
 func TestFirstServeConfigValidation(t *testing.T) {
@@ -59,7 +61,7 @@ func TestFirstServeConfigValidation(t *testing.T) {
 	require.NotEqual(t, cfg.key(1), cfg.key(2), "changing groups isolates old connections")
 }
 
-func TestFirstServeLegacyPolicyDoesNotAffectRotation(t *testing.T) {
+func TestFirstServeSlowThresholdResetsOnHealthySample(t *testing.T) {
 	for _, extra := range []map[string]any{
 		nil,
 		{"openai_first_serve": map[string]any{"ttl_minutes": 12}},
@@ -67,15 +69,17 @@ func TestFirstServeLegacyPolicyDoesNotAffectRotation(t *testing.T) {
 	} {
 		now := time.Now()
 		s := newOpenAIFirstServeState(&Account{Extra: extra}, "route", now)
-		require.Equal(t, 240, s.status.Config.RotateSeconds)
-		for range 6 {
-			s.observe(60000, now)
-			require.False(t, s.due(now))
-			now = now.Add(240 * time.Second)
-			require.True(t, s.due(now))
-			s.rotate(nil, now)
-			require.Equal(t, "route", s.status.ConnID)
-		}
+		s.observe(60000, now)
+		s.observe(60000, now)
+		require.False(t, s.due(now))
+		s.observe(100, now)
+		require.False(t, s.due(now), "a healthy sample resets consecutive slow requests")
+		s.observe(60000, now)
+		s.observe(60000, now)
+		s.observe(60000, now)
+		require.True(t, s.due(now))
+		s.rotate(nil, now)
+		require.False(t, s.due(now))
 	}
 }
 

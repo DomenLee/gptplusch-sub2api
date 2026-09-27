@@ -67,11 +67,15 @@ func TestFirstServeHTTPReuseRotationAndIsolation(t *testing.T) {
 	require.Equal(t, expiry, second.entry.state.status.ExpiresAt, "healthy requests do not renew TTL")
 	ms = 15001
 	second.finish(&OpenAIForwardResult{FirstTokenMs: &ms}, nil)
-	require.Equal(t, expiry, second.entry.state.status.ExpiresAt)
-	second.entry.state.status.ExpiresAt = time.Now().Add(-time.Second)
+	require.False(t, second.entry.state.due(time.Now()), "one slow request must not rotate")
+	for range 2 {
+		_, _, slow, slowErr := svc.prepareFirstServeHTTP(ctx, firstServeHTTPContext(1, "session"), a, body)
+		require.NoError(t, slowErr)
+		slow.finish(&OpenAIForwardResult{FirstTokenMs: &ms}, nil)
+	}
 	_, copyC, third, err := svc.prepareFirstServeHTTP(ctx, firstServeHTTPContext(1, "session"), a, body)
 	require.NoError(t, err)
-	require.Equal(t, first.id, third.id)
+	require.NotEqual(t, first.id, third.id, "rotation starts a new routing session")
 	require.NotEqual(t, *copyA.ProxyID, *copyC.ProxyID)
 	require.Equal(t, 1, third.entry.state.status.Rotations)
 	third.finish(nil, nil)
@@ -94,16 +98,18 @@ func TestFirstServeHTTPExpiryContinuationAndOldResponse(t *testing.T) {
 	c := firstServeHTTPContext(1, "session")
 	ctx, _, old, err := svc.prepareFirstServeHTTP(context.Background(), c, a, []byte(`{"stream":true}`))
 	require.NoError(t, err)
-	old.entry.state.status.ExpiresAt = time.Now().Add(-time.Second)
+	for range openAIFirstServeSlowRequestLimit {
+		old.entry.state.observe(16000, time.Now())
+	}
 	_, _, continuation, err := svc.prepareFirstServeHTTP(context.Background(), c, a, []byte(`{"previous_response_id":"resp_previous","input":[{"type":"function_call_output","call_id":"call_1","output":"ok"}]}`))
 	require.NoError(t, err)
-	require.Equal(t, old.id, continuation.id)
+	require.NotEqual(t, old.id, continuation.id, "rotation starts a new routing session")
 	require.Equal(t, int64(102), continuation.entry.state.status.ProxyID)
 	require.Equal(t, 1, continuation.entry.state.status.Rotations)
 	continuation.finish(nil, nil)
 	_, _, fresh, err := svc.prepareFirstServeHTTP(context.Background(), c, a, []byte(`{"input":"full history"}`))
 	require.NoError(t, err)
-	require.Equal(t, old.id, fresh.id)
+	require.Equal(t, continuation.id, fresh.id)
 	observeFirstServeHTTP(ctx, 20000)
 	ms := 20000
 	old.finish(&OpenAIForwardResult{FirstTokenMs: &ms}, nil)
@@ -118,11 +124,12 @@ func TestFirstServeHTTPUnavailableProxyRetriesOnNextRequest(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	c := firstServeHTTPContext(1, "session")
 	body := []byte(`{"stream":true}`)
-	ctx, _, first, err := svc.prepareFirstServeHTTP(context.Background(), c, a, body)
+	_, _, first, err := svc.prepareFirstServeHTTP(context.Background(), c, a, body)
 	require.NoError(t, err)
-	observeFirstServeHTTP(ctx, 16000)
+	for range openAIFirstServeSlowRequestLimit {
+		first.entry.state.observe(16000, time.Now())
+	}
 	first.finish(nil, nil)
-	first.entry.state.status.ExpiresAt = time.Now().Add(-time.Second)
 	_, _, unavailable, err := svc.prepareFirstServeHTTP(context.Background(), c, a, body)
 	require.NoError(t, err)
 	require.Equal(t, first.id, unavailable.id)
@@ -131,7 +138,7 @@ func TestFirstServeHTTPUnavailableProxyRetriesOnNextRequest(t *testing.T) {
 	SetDefaultProxyGroupResolver(firstServeTestResolver{first: proxy, next: &Proxy{ID: 102, Host: "next.test", Port: 8080}})
 	_, selected, next, err := svc.prepareFirstServeHTTP(context.Background(), c, a, body)
 	require.NoError(t, err)
-	require.Equal(t, first.id, next.id, "rotation retains the routing identity")
+	require.NotEqual(t, first.id, next.id, "rotation starts a new routing session")
 	require.Equal(t, int64(102), selected.Proxy.ID)
 	next.finish(nil, nil)
 }
@@ -290,7 +297,7 @@ func TestFirstServeHTTPForwardStreaming(t *testing.T) {
 				}
 				if turn == 2 {
 					for _, entry := range svc.openaiFirstServeHTTP.items {
-						entry.state.status.ExpiresAt = time.Now().Add(-time.Second)
+						entry.state.status.RotationPending = true
 					}
 				}
 				c := firstServeHTTPContext(1, "session")
@@ -314,13 +321,13 @@ func TestFirstServeHTTPForwardStreaming(t *testing.T) {
 				}
 				require.True(t, result.Stream)
 				require.False(t, result.OpenAIWSMode)
-				require.Equal(t, turn == 1, result.FirstServeActive, "only the second request reuses the combination; rotation resets it")
+				require.Equal(t, turn == 1, result.FirstServeActive, "a pending rotation starts a new combination")
 			}
 			require.Equal(t, original, body)
 			require.Equal(t, upstream.proxies[0], upstream.proxies[1])
 			require.NotEqual(t, upstream.proxies[1], upstream.proxies[2])
 			require.Equal(t, upstream.headers[0].Get("session_id"), upstream.headers[1].Get("session_id"))
-			require.Equal(t, upstream.headers[1].Get("session_id"), upstream.headers[2].Get("session_id"))
+			require.NotEqual(t, upstream.headers[1].Get("session_id"), upstream.headers[2].Get("session_id"))
 			if !upstream.raw {
 				for i, b := range upstream.bodies {
 					require.Equal(t, upstream.headers[i].Get("session_id"), gjson.GetBytes(b, "prompt_cache_key").String())
@@ -348,7 +355,7 @@ func TestFirstServeHTTPRequestPreservesContinuationAndNonTarget(t *testing.T) {
 	require.Equal(t, lease.id, gjson.GetBytes(rewritten, "client_metadata.session_id").String())
 	embedded := gjson.GetBytes(rewritten, "client_metadata.x-codex-turn-metadata").String()
 	require.Equal(t, lease.id, gjson.Get(embedded, "session_id").String())
-	require.Equal(t, "thread", gjson.Get(embedded, "thread_id").String())
+	require.Equal(t, lease.conversationID, gjson.Get(embedded, "thread_id").String())
 	lease.finish(nil, errors.New("test failure"))
 	require.Equal(t, "connection_failed", lease.entry.state.status.Reason)
 	a.Extra["openai_apikey_responses_websockets_v2_mode"] = OpenAIWSIngressModeCtxPool
@@ -411,10 +418,10 @@ func TestFirstServeHTTPAccountSharingKeepsConversationsSeparate(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, leases[0].id, separate.id, "sharing never crosses upstream accounts")
 	separate.finish(nil, nil)
-	leases[0].entry.state.status.ExpiresAt = time.Now().Add(-time.Second)
+	leases[0].entry.state.status.RotationPending = true
 	_, rotatedAccount, rotated, err := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(4, "new-client"), a, []byte(`{"stream":true}`))
 	require.NoError(t, err)
-	require.Equal(t, leases[0].id, rotated.id)
+	require.NotEqual(t, leases[0].id, rotated.id, "rotation starts a new routing session")
 	require.NotEqual(t, accounts[0].ProxyID, rotatedAccount.ProxyID)
 	require.Equal(t, 1, rotated.entry.state.status.Requests)
 	rotated.finish(nil, nil)
@@ -514,10 +521,10 @@ func TestFirstServeHTTPReuseSnapshotSurvivesConcurrentRotation(t *testing.T) {
 	firstResult := &OpenAIForwardResult{Stream: true}
 	first.finish(firstResult, nil)
 	require.False(t, firstResult.FirstServeActive)
-	first.entry.state.status.ExpiresAt = time.Now().Add(-time.Second)
+	first.entry.state.status.RotationPending = true
 	_, _, fresh, err := svc.prepareFirstServeHTTP(context.Background(), c, a, body)
 	require.NoError(t, err)
-	require.Equal(t, first.id, fresh.id)
+	require.NotEqual(t, first.id, fresh.id)
 	second.use() // already prepared against the old ID and proxy
 	secondResult := &OpenAIForwardResult{Stream: true}
 	second.finish(secondResult, nil)
@@ -592,7 +599,7 @@ func TestFirstServeHTTPMissingProxyGroup(t *testing.T) {
 	require.Nil(t, lease)
 }
 
-func TestFirstServeHTTPFixedRotationPreservesWireIDsAndContinuation(t *testing.T) {
+func TestFirstServeHTTPFixedRotationStartsNewResponseChain(t *testing.T) {
 	a := firstServeHTTPAccount(t)
 	a.Type = AccountTypeOAuth
 	a.Extra["openai_oauth_responses_websockets_v2_mode"] = OpenAIWSIngressModeFirstServe
@@ -606,7 +613,7 @@ func TestFirstServeHTTPFixedRotationPreservesWireIDsAndContinuation(t *testing.T
 	require.NoError(t, err)
 	require.NoError(t, applyFirstServeHTTPRequest(req, selected))
 	first.finish(nil, nil)
-	first.entry.state.status.ExpiresAt = time.Now().Add(-time.Second)
+	first.entry.state.status.RotationPending = true
 	ctx, selected, next, err := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(2, "second"), a, body)
 	require.NoError(t, err)
 	defer next.finish(nil, nil)
@@ -616,12 +623,12 @@ func TestFirstServeHTTPFixedRotationPreservesWireIDsAndContinuation(t *testing.T
 	wire, err := io.ReadAll(outbound.Body)
 	require.NoError(t, err)
 	require.Equal(t, int64(102), selected.Proxy.ID)
-	require.Equal(t, req.Header.Get("session_id"), outbound.Header.Get("session_id"))
-	require.Equal(t, first.id, outbound.Header.Get("conversation_id"), "full convergence includes the conversation identity")
+	require.NotEqual(t, req.Header.Get("session_id"), outbound.Header.Get("session_id"))
+	require.NotEqual(t, first.id, outbound.Header.Get("conversation_id"), "full convergence updates the conversation identity")
 	for _, field := range []string{"prompt_cache_key", "client_metadata.session_id", "client_metadata.thread_id"} {
-		require.Equal(t, first.id, gjson.GetBytes(wire, field).String())
+		require.Equal(t, outbound.Header.Get("session_id"), gjson.GetBytes(wire, field).String())
 	}
-	require.Equal(t, "resp_own", gjson.GetBytes(wire, "previous_response_id").String())
+	require.False(t, gjson.GetBytes(wire, "previous_response_id").Exists(), "proxy rotation starts a new response chain")
 	require.JSONEq(t, gjson.GetBytes(body, "input").Raw, gjson.GetBytes(wire, "input").Raw)
 }
 
@@ -702,14 +709,66 @@ func TestFirstServeLiveSidebandFollowsSharedRoute(t *testing.T) {
 		conn, err := svc.dialLiveSideband(context.Background(), record)
 		require.NoError(t, err)
 		require.NoError(t, conn.Close())
-		require.Equal(t, route.id, dialer.headers[i].Get("session_id"))
+		if i == 0 {
+			require.Equal(t, route.id, dialer.headers[i].Get("session_id"))
+		} else {
+			require.NotEqual(t, route.id, dialer.headers[i].Get("session_id"))
+		}
 		if i == 0 {
 			require.Equal(t, route.fingerprint, dialer.headers[i].Get("x-codex-installation-id"))
 		} else {
 			require.NotEmpty(t, dialer.headers[i].Get("x-codex-installation-id"))
 			require.NotEqual(t, route.fingerprint, dialer.headers[i].Get("x-codex-installation-id"))
 		}
-		route.entry.state.status.ExpiresAt = time.Now().Add(-time.Second)
+		route.entry.state.status.RotationPending = true
 	}
 	require.Equal(t, []string{"http://first.test:8080", "http://next.test:8080"}, dialer.proxies)
+}
+
+// Every conversation using the account must leave the old response generation,
+// including requests prepared after another conversation has performed rotation.
+func TestFirstServeHTTPRotationResetsAllConversations(t *testing.T) {
+	a := firstServeHTTPAccount(t)
+	a.Extra["openai_first_serve"] = map[string]any{"reuse_scope": "account"}
+	svc := &OpenAIGatewayService{}
+	body := []byte(`{"stream":true,"previous_response_id":"resp_old","input":"next","client_metadata":{"session_id":"old","thread_id":"old","conversation_id":"old","window_id":"old","turn_id":"old","x-codex-turn-state":"old","x-codex-turn-metadata":"{\"session_id\":\"old\",\"thread_id\":\"old\",\"window_id\":\"old\",\"turn_id\":\"old\"}"}}`)
+	_, _, old, err := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(1, "one"), a, body)
+	require.NoError(t, err)
+	_, _, other, err := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(2, "two"), a, body)
+	require.NoError(t, err)
+	other.finish(&OpenAIForwardResult{RequestID: "req_old", ResponseID: "resp_old"}, nil)
+	old.entry.state.status.RotationPending = true
+	_, _, next, err := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(1, "one"), a, body)
+	require.NoError(t, err)
+	require.NotEqual(t, old.id, next.id)
+	require.NotEqual(t, old.conversationID, next.conversationID)
+	rewritten, err := applyFirstServeBody(body, next)
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(rewritten, "previous_response_id").Exists())
+	require.False(t, gjson.GetBytes(rewritten, "client_metadata.x-codex-turn-state").Exists())
+	require.Equal(t, next.id, gjson.GetBytes(rewritten, "client_metadata.session_id").String())
+	for _, field := range []string{"thread_id", "conversation_id", "window_id"} {
+		require.Equal(t, next.conversationID, gjson.GetBytes(rewritten, "client_metadata."+field).String())
+	}
+	embedded := gjson.GetBytes(rewritten, "client_metadata.x-codex-turn-metadata").String()
+	require.Equal(t, next.turnID, gjson.Get(embedded, "turn_id").String())
+	require.Equal(t, next.turnID, gjson.GetBytes(rewritten, "client_metadata.turn_id").String())
+	next.finish(&OpenAIForwardResult{RequestID: "req_new", ResponseID: "resp_new"}, nil)
+	// An old response arriving late must not become valid in the new generation.
+	old.finish(&OpenAIForwardResult{RequestID: "req_late", ResponseID: "resp_late"}, nil)
+	_, _, later, err := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(2, "two"), a, body)
+	require.NoError(t, err)
+	defer later.finish(nil, nil)
+	require.Equal(t, next.id, later.id)
+	require.NotEqual(t, other.conversationID, later.conversationID)
+	for _, id := range []string{"resp_old", "resp_late", "resp_unknown", "req_new"} {
+		payload := []byte(`{"previous_response_id":"` + id + `","input":"next"}`)
+		wire, wireErr := applyFirstServeBody(payload, later)
+		require.NoError(t, wireErr)
+		require.False(t, gjson.GetBytes(wire, "previous_response_id").Exists(), id)
+	}
+	wire, err := applyFirstServeBody([]byte(`{"previous_response_id":"resp_new","input":"next"}`), later)
+	require.NoError(t, err)
+	require.Equal(t, "resp_new", gjson.GetBytes(wire, "previous_response_id").String())
+	require.Equal(t, "resp_old", gjson.GetBytes(body, "previous_response_id").String(), "ingress remains immutable")
 }

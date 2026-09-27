@@ -32,7 +32,7 @@ func TestFirstServeFingerprintLifetime(t *testing.T) {
 	require.Equal(t, first.started.Add(120*time.Second), first.entry.state.status.ExpiresAt)
 
 	// Exercise the normal convergence pass followed by final routing rewriting.
-	wire := func(ctx context.Context, account *Account) (string, string) {
+	wire := func(ctx context.Context, account *Account, wantPreviousResponseID bool) (string, string) {
 		t.Helper()
 		ids := resolveCodexFingerprintIDsFromRequest(account, nil)
 		payload, _, err := applyCodexFingerprintClientMetadataRaw(body, ids)
@@ -50,38 +50,42 @@ func TestFirstServeFingerprintLifetime(t *testing.T) {
 		require.Equal(t, fingerprint, gjson.GetBytes(forwarded, "client_metadata.x-codex-installation-id").String())
 		require.Equal(t, fingerprint, gjson.GetBytes(forwarded, "client_metadata.installation_id").String())
 		require.Equal(t, fingerprint, gjson.Get(gjson.GetBytes(forwarded, "client_metadata.x-codex-turn-metadata").String(), "installation_id").String())
-		require.Equal(t, "resp_own", gjson.GetBytes(forwarded, "previous_response_id").String())
+		if wantPreviousResponseID {
+			require.Equal(t, "resp_own", gjson.GetBytes(forwarded, "previous_response_id").String())
+		} else {
+			require.False(t, gjson.GetBytes(forwarded, "previous_response_id").Exists(), "proxy rotation starts a new response chain")
+		}
 		require.Equal(t, "hello", gjson.GetBytes(forwarded, "input").String())
-		require.Equal(t, first.id, gjson.GetBytes(forwarded, "prompt_cache_key").String())
+		require.Equal(t, req.Header.Get("session_id"), gjson.GetBytes(forwarded, "prompt_cache_key").String())
 		return fingerprint, req.Header.Get("session_id")
 	}
-	fingerprint, routeID := wire(ctx, selected)
+	fingerprint, routeID := wire(ctx, selected, true)
 	require.Equal(t, first.fingerprint, fingerprint)
 	expires := first.entry.state.status.ExpiresAt
 	for i := range 3 {
 		nextCtx, nextAccount, next, err := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(int64(i+2), "other"), a, body)
 		require.NoError(t, err)
-		fp, id := wire(nextCtx, nextAccount)
+		fp, id := wire(nextCtx, nextAccount, true)
 		require.Equal(t, fingerprint, fp, "all sessions reuse the current device")
 		require.Equal(t, routeID, id)
 		require.Equal(t, expires, next.entry.state.status.ExpiresAt, "reuse must not extend the lifetime")
 		next.finish(nil, nil)
 	}
-	first.entry.state.status.ExpiresAt = time.Now().Add(-time.Second)
+	first.entry.state.status.RotationPending = true
 	nextCtx, nextAccount, next, err := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(5, "next"), a, body)
 	require.NoError(t, err)
 	defer next.finish(nil, nil)
-	newFingerprint, newRoute := wire(nextCtx, nextAccount)
+	newFingerprint, newRoute := wire(nextCtx, nextAccount, false)
 	require.NotEqual(t, fingerprint, newFingerprint)
-	require.Equal(t, routeID, newRoute)
+	require.NotEqual(t, routeID, newRoute)
 	require.NotEqual(t, selected.Proxy.ID, nextAccount.Proxy.ID)
 	require.Equal(t, next.started.Add(120*time.Second), next.entry.state.status.ExpiresAt)
-	oldFingerprint, oldRoute := wire(ctx, selected)
+	oldFingerprint, oldRoute := wire(ctx, selected, true)
 	require.Equal(t, fingerprint, oldFingerprint, "in-flight requests and retries keep their captured device")
 	require.Equal(t, routeID, oldRoute)
 
 	// The resolver has no alternative after B: retain IP and fingerprint together.
-	next.entry.state.status.ExpiresAt = time.Now().Add(-time.Second)
+	next.entry.state.status.RotationPending = true
 	_, unchangedAccount, unchanged, err := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(6, "failed-rotation"), a, body)
 	require.NoError(t, err)
 	require.Equal(t, newFingerprint, unchanged.fingerprint)
@@ -100,7 +104,7 @@ func TestFirstServeFingerprintConcurrentRotation(t *testing.T) {
 	_, _, old, err := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(1, "old"), a, nil)
 	require.NoError(t, err)
 	old.finish(nil, nil)
-	old.entry.state.status.ExpiresAt = time.Now().Add(-time.Second)
+	old.entry.state.status.RotationPending = true
 	type snapshot struct {
 		fingerprint, id string
 		proxy           int64
@@ -128,7 +132,7 @@ func TestFirstServeFingerprintConcurrentRotation(t *testing.T) {
 		require.NoError(t, result.err)
 		require.NotEmpty(t, result.fingerprint)
 		require.NotEqual(t, old.fingerprint, result.fingerprint)
-		require.Equal(t, old.id, result.id)
+		require.NotEqual(t, old.id, result.id)
 		require.Equal(t, int64(102), result.proxy)
 		identities[result.fingerprint] = true
 	}

@@ -21,6 +21,32 @@ import (
 )
 
 const openAIFirstServeHTTPLimit = 4096
+const openAIFirstServeResponseLimit = 4096
+
+// Keep IDs only; never share prompts or response content between conversations.
+// An evicted/unknown ID starts a new chain after rotation.
+type firstServeResponses struct {
+	ids   map[string]bool
+	order []string
+	next  int
+}
+
+func (r *firstServeResponses) add(id string) {
+	if id == "" || r.ids[id] {
+		return
+	}
+	if r.ids == nil {
+		r.ids = make(map[string]bool)
+	}
+	if len(r.order) == openAIFirstServeResponseLimit {
+		delete(r.ids, r.order[r.next])
+		r.order[r.next] = id
+		r.next = (r.next + 1) % openAIFirstServeResponseLimit
+	} else {
+		r.order = append(r.order, id)
+	}
+	r.ids[id] = true
+}
 
 // HTTP keeps routing identities only, never prompts or response history. Each
 // entry has its own lock: neither proxy lookup nor a running SSE blocks others.
@@ -32,6 +58,7 @@ type openAIFirstServeHTTPRegistry struct {
 type openAIFirstServeHTTPEntry struct {
 	mu              sync.Mutex
 	state           *openAIFirstServeState
+	responses       *firstServeResponses
 	fingerprintSeed string    // renewed only when proxy selection succeeds; protected by mu
 	refs            int       // protected by registry.mu
 	lastUsed        time.Time // protected by registry.mu
@@ -45,22 +72,25 @@ type openAIFirstServeRouteOptions struct {
 }
 
 type openAIFirstServeHTTPLease struct {
-	registry       *openAIFirstServeHTTPRegistry
-	entry          *openAIFirstServeHTTPEntry
-	key            string
-	id             string
-	fingerprint    string // immutable device identity for the captured proxy generation
-	accountID      int64
-	conversationID string
-	shared         bool
-	kind           string
-	started        time.Time
-	missing        bool
-	fresh          bool
-	uses           *atomic.Uint64
-	applied        bool // protected by entry.mu
-	reused         bool // protected by entry.mu
-	observed       bool // protected by entry.mu
+	registry          *openAIFirstServeHTTPRegistry
+	entry             *openAIFirstServeHTTPEntry
+	key               string
+	id                string
+	fingerprint       string // immutable device identity for the captured proxy generation
+	accountID         int64
+	conversationID    string
+	shared            bool
+	kind              string
+	started           time.Time
+	missing           bool
+	fresh             bool
+	resetContinuation bool                 // reject response IDs from before the captured generation
+	responses         *firstServeResponses // protected by entry.mu
+	turnID            string
+	uses              *atomic.Uint64
+	applied           bool // protected by entry.mu
+	reused            bool // protected by entry.mu
+	observed          bool // protected by entry.mu
 }
 
 func firstServeHTTPLease(ctx context.Context) *openAIFirstServeHTTPLease {
@@ -165,7 +195,6 @@ func (s *OpenAIGatewayService) prepareFirstServeRoute(ctx context.Context, c *gi
 		key = fmt.Sprintf("%d:account:%s", account.ID, cfg.key(*account.ProxyGroupID))
 		missing = false
 	}
-	conversationID := uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("first_serve:%d:%d:%d:%s", account.ID, apiKeyID, groupID, scope))).String()
 	kind := "non_stream"
 	if gjson.GetBytes(body, "stream").Bool() {
 		kind = "stream"
@@ -182,7 +211,7 @@ func (s *OpenAIGatewayService) prepareFirstServeRoute(ctx context.Context, c *gi
 		return ctx, account, nil, err
 	}
 	l := &openAIFirstServeHTTPLease{registry: &s.openaiFirstServeHTTP, entry: entry, key: key, accountID: account.ID, missing: missing,
-		shared: shared, conversationID: conversationID, kind: kind, started: now}
+		shared: shared, kind: kind, started: now}
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	if entry.state == nil {
@@ -194,8 +223,8 @@ func (s *OpenAIGatewayService) prepareFirstServeRoute(ctx context.Context, c *gi
 	copyAccount := *account
 	copyAccount.Proxy = state.proxy
 	if state.proxy == nil || state.due(now) {
-		// A fixed interval controls rotation. previous_response_id is preserved
-		// in the request body and does not delay selecting the next proxy.
+		// Rotation is requested only after three consecutive slow first-token
+		// samples. A successful rotation starts a new upstream response chain.
 		proxy, selectErr := selectOpenAIFirstServeProxy(ctx, &copyAccount, state.status.ProxyID)
 		if selectErr != nil {
 			state.publish("proxy_unavailable", now)
@@ -210,6 +239,7 @@ func (s *OpenAIGatewayService) prepareFirstServeRoute(ctx context.Context, c *gi
 			} else {
 				state.bind(proxy, uuid.NewString(), now)
 			}
+			entry.responses = &firstServeResponses{}
 			l.fresh = true
 			entry.fingerprintSeed = newCodexFingerprintSeed()
 		}
@@ -219,6 +249,10 @@ func (s *OpenAIGatewayService) prepareFirstServeRoute(ctx context.Context, c *gi
 	}
 	state.publish(state.status.Reason, now)
 	l.id = state.status.ConnID
+	l.resetContinuation = state.status.Rotations > 0
+	l.responses = entry.responses
+	l.turnID = uuid.NewString()
+	l.conversationID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("first_serve:%d:%d:%d:%s:%s", account.ID, apiKeyID, groupID, scope, l.id))).String()
 	if account.GetCodexFingerprintMode() != codexFingerprintOff {
 		// Keep the stored account identity intact. Every request receives the
 		// same generation seed, including an old request finishing after rotation.
@@ -236,7 +270,7 @@ func (s *OpenAIGatewayService) prepareFirstServeRoute(ctx context.Context, c *gi
 	return context.WithValue(ctx, openAIFirstServeHTTPKey{}, l), &copyAccount, l, nil
 }
 
-// Record first output timing for diagnostics only. Rotation depends on time.
+// Record first output timing and update the consecutive slow-request policy.
 func observeFirstServeHTTP(ctx context.Context, ms int) {
 	l := firstServeHTTPLease(ctx)
 	if l == nil || l.kind != "stream" {
@@ -275,6 +309,9 @@ func (l *openAIFirstServeHTTPLease) finish(result *OpenAIForwardResult, err erro
 	defer l.entry.mu.Unlock()
 	if result != nil {
 		result.FirstServeActive = l.kind == "stream" && l.applied && l.reused
+	}
+	if result != nil && err == nil {
+		l.responses.add(strings.TrimSpace(result.ResponseID))
 	}
 	state := l.entry.state
 	if state.uses != l.uses {
@@ -342,14 +379,25 @@ func applyFirstServeHTTPRequest(req *http.Request, account *Account) error {
 	return nil
 }
 
+func (l *openAIFirstServeHTTPLease) resetsResponse(id string) bool {
+	if l == nil || !l.resetContinuation || strings.TrimSpace(id) == "" {
+		return false
+	}
+	l.entry.mu.Lock()
+	defer l.entry.mu.Unlock()
+	return !l.responses.ids[strings.TrimSpace(id)]
+}
+
+func (l *openAIFirstServeHTTPLease) recordResponse(id string) {
+	l.entry.mu.Lock()
+	defer l.entry.mu.Unlock()
+	l.responses.add(strings.TrimSpace(id))
+}
+
 func firstServeMetadata(l *openAIFirstServeHTTPLease) map[string]any {
-	metadata := map[string]any{"session_id": l.id}
+	metadata := map[string]any{"session_id": l.id, "thread_id": l.conversationID, "window_id": l.conversationID, "conversation_id": l.conversationID, "turn_id": l.turnID}
 	if l.fingerprint != "" {
 		metadata["installation_id"] = l.fingerprint
-	}
-	if l.shared {
-		metadata["thread_id"] = l.conversationID
-		metadata["window_id"] = l.conversationID
 	}
 	return metadata
 }
@@ -362,22 +410,28 @@ func applyFirstServeHeaders(headers http.Header, l *openAIFirstServeHTTPLease) {
 		headers.Set(key, l.id)
 	}
 	metadata := firstServeMetadata(l)
-	if l.shared {
-		headers.Set("conversation_id", l.conversationID)
-		for _, key := range []string{"thread-id", "x-client-request-id", "x-codex-window-id"} {
-			if headers.Get(key) != "" {
-				headers.Set(key, l.conversationID)
-			}
+	headers.Set("conversation_id", l.conversationID)
+	for _, key := range []string{"thread-id", "x-client-request-id", "x-codex-window-id"} {
+		if headers.Get(key) != "" {
+			headers.Set(key, l.conversationID)
 		}
 	}
 	rewriteCodexTurnMetadataFields(headers, metadata)
-	if l.fresh || l.shared {
+	if l.fresh || l.shared || l.resetContinuation {
 		// A client echo must not pin an account-wide combination to its old route.
 		headers.Del("x-codex-turn-state")
 	}
 }
 
 func applyFirstServeBody(body []byte, l *openAIFirstServeHTTPLease) ([]byte, error) {
+	if l.resetsResponse(gjson.GetBytes(body, "previous_response_id").String()) {
+		// A rotated proxy must not inherit the old upstream response chain.
+		var err error
+		body, _, err = dropPreviousResponseIDFromRawPayload(body)
+		if err != nil {
+			return nil, err
+		}
+	}
 	body, err := sjson.SetBytes(body, "prompt_cache_key", l.id)
 	if err != nil {
 		return nil, err
@@ -400,14 +454,24 @@ func applyFirstServeBody(body []byte, l *openAIFirstServeHTTPLease) ([]byte, err
 			return nil, err
 		}
 	}
-	if l.shared {
-		for _, field := range []string{"client_metadata.thread_id", "client_metadata.x-codex-window-id"} {
-			if gjson.GetBytes(body, field).Exists() {
-				body, err = sjson.SetBytes(body, field, l.conversationID)
-				if err != nil {
-					return nil, err
-				}
+	for _, field := range []string{"client_metadata.thread_id", "client_metadata.x-codex-window-id", "client_metadata.window_id", "client_metadata.conversation_id"} {
+		if gjson.GetBytes(body, field).Exists() {
+			body, err = sjson.SetBytes(body, field, l.conversationID)
+			if err != nil {
+				return nil, err
 			}
+		}
+	}
+	if gjson.GetBytes(body, "client_metadata.turn_id").Exists() {
+		body, err = sjson.SetBytes(body, "client_metadata.turn_id", l.turnID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if l.fresh || l.shared || l.resetContinuation {
+		body, err = sjson.DeleteBytes(body, "client_metadata.x-codex-turn-state")
+		if err != nil {
+			return nil, err
 		}
 	}
 	if embedded := gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata"); embedded.Type == gjson.String {

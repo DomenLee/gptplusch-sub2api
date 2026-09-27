@@ -1149,8 +1149,11 @@ export interface FirstServeStatus {
   proxy_name: string
   conn_id: string
   expires_at: string
+  started_at?: string
   updated_at: string
   first_token_ms: number | null
+  slow_count?: number
+  rotation_pending?: boolean
   rotations: number
   reason: string
   active: boolean

@@ -16,6 +16,10 @@ import (
 
 const openAIFirstServeMaxReplay = 8 << 20
 
+// A healthy first token resets the consecutive slow-request count. Rotation
+// starts on the request after three consecutive samples above the threshold.
+const openAIFirstServeSlowRequestLimit = 3
+
 // Configuration is account scoped. Conversation history remains local to each
 // WebSocket connection; HTTP routing affinity can be shared explicitly.
 func (a *Account) IsOpenAIFirstServe() bool {
@@ -53,22 +57,25 @@ type OpenAIFirstServeRequestStatus struct {
 }
 
 type OpenAIFirstServeStatus struct {
-	Requests       int                            `json:"requests"`
-	LastRequest    *OpenAIFirstServeRequestStatus `json:"last_request,omitempty"`
-	Transport      string                         `json:"transport"`
-	SessionMissing bool                           `json:"session_missing,omitempty"`
-	ID             string                         `json:"id"`
-	AccountID      int64                          `json:"account_id"`
-	ProxyID        int64                          `json:"proxy_id"`
-	ProxyName      string                         `json:"proxy_name"`
-	ConnID         string                         `json:"conn_id"`
-	ExpiresAt      time.Time                      `json:"expires_at"`
-	UpdatedAt      time.Time                      `json:"updated_at"`
-	FirstTokenMs   *int                           `json:"first_token_ms"`
-	Rotations      int                            `json:"rotations"`
-	Reason         string                         `json:"reason"`
-	Active         bool                           `json:"active"`
-	Config         OpenAIFirstServeConfig         `json:"config"`
+	Requests        int                            `json:"requests"`
+	LastRequest     *OpenAIFirstServeRequestStatus `json:"last_request,omitempty"`
+	Transport       string                         `json:"transport"`
+	SessionMissing  bool                           `json:"session_missing,omitempty"`
+	ID              string                         `json:"id"`
+	AccountID       int64                          `json:"account_id"`
+	ProxyID         int64                          `json:"proxy_id"`
+	ProxyName       string                         `json:"proxy_name"`
+	ConnID          string                         `json:"conn_id"`
+	ExpiresAt       time.Time                      `json:"expires_at"`
+	StartedAt       time.Time                      `json:"started_at"`
+	UpdatedAt       time.Time                      `json:"updated_at"`
+	FirstTokenMs    *int                           `json:"first_token_ms"`
+	SlowCount       int                            `json:"slow_count"`
+	RotationPending bool                           `json:"rotation_pending"`
+	Rotations       int                            `json:"rotations"`
+	Reason          string                         `json:"reason"`
+	Active          bool                           `json:"active"`
+	Config          OpenAIFirstServeConfig         `json:"config"`
 }
 
 // Only diagnostic snapshots are global. No credentials or conversation data
@@ -100,6 +107,7 @@ func GetOpenAIFirstServeStatuses(accountID int64) []OpenAIFirstServeStatus {
 
 type openAIFirstServeState struct {
 	scope       string
+	routeID     string // upstream routing generation; independent of the physical WS ConnID
 	status      OpenAIFirstServeStatus
 	proxy       *Proxy
 	fingerprint string         // physical WS handshake identity; shared routing owns its lifetime
@@ -149,7 +157,10 @@ func (s *openAIFirstServeState) bind(proxy *Proxy, connID string, now time.Time)
 	s.status.ConnID = connID
 	s.status.Active = true
 	s.status.ExpiresAt = now.Add(s.status.Config.ttl())
+	s.status.StartedAt = now
 	s.status.FirstTokenMs = nil
+	s.status.SlowCount = 0
+	s.status.RotationPending = false
 	s.status.Requests = 0
 	s.status.LastRequest = nil
 	if proxy != nil {
@@ -158,19 +169,46 @@ func (s *openAIFirstServeState) bind(proxy *Proxy, connID string, now time.Time)
 	s.publish("observing", now)
 }
 
-// rotate changes only the selected proxy. The routing/session ID remains
-// stable so upstream requests continue using the same first-serve identity.
+// rotate starts a new upstream session generation together with the selected
+// proxy. The old response chain must never cross that generation boundary.
 func (s *openAIFirstServeState) rotate(proxy *Proxy, now time.Time) {
-	s.bind(proxy, s.status.ConnID, now)
+	s.bind(proxy, uuid.NewString(), now)
 }
 
 func (s *openAIFirstServeState) observe(ms int, now time.Time) {
 	s.status.FirstTokenMs = &ms
-	s.publish("ready", now)
+	threshold := s.status.Config.TTFTSeconds * 1000
+	if ms > threshold {
+		s.status.SlowCount++
+		s.status.Reason = "slow"
+		if s.status.SlowCount >= openAIFirstServeSlowRequestLimit {
+			s.status.RotationPending = true
+		}
+	} else if !s.status.RotationPending {
+		s.status.SlowCount = 0
+		s.status.Reason = "ready"
+	}
+	s.publish(s.status.Reason, now)
 }
 
-func (s *openAIFirstServeState) due(now time.Time) bool {
-	return !now.Before(s.status.ExpiresAt)
+func (s *openAIFirstServeState) due(_ time.Time) bool {
+	return s.status.RotationPending
+}
+
+// syncRotationStatus copies the routing-health fields between the HTTP route
+// registry and a native WebSocket diagnostic state. Conversation history and
+// routing IDs stay local to their own connection.
+func syncFirstServeRotationStatus(dst, src *openAIFirstServeState) {
+	if dst == nil || src == nil {
+		return
+	}
+	dst.status.ExpiresAt = src.status.ExpiresAt
+	dst.status.StartedAt = src.status.StartedAt
+	dst.status.FirstTokenMs = src.status.FirstTokenMs
+	dst.status.SlowCount = src.status.SlowCount
+	dst.status.RotationPending = src.status.RotationPending
+	dst.status.Rotations = src.status.Rotations
+	dst.status.Reason = src.status.Reason
 }
 
 func (s *openAIFirstServeState) input(payload []byte) {

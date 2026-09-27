@@ -17,16 +17,20 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func TestFirstServeFixedExpiry(t *testing.T) {
+func TestFirstServeSlowThreshold(t *testing.T) {
 	now := time.Now()
 	s := newOpenAIFirstServeState(&Account{ID: 98701}, "route", now)
-	for _, ms := range []int{100, 15000, 15001, 90000} {
-		s.observe(ms, now.Add(time.Minute))
-		require.False(t, s.due(now.Add(time.Minute)))
-		require.Equal(t, now.Add(240*time.Second), s.status.ExpiresAt, "samples do not renew expiry")
-	}
-	require.False(t, s.due(now.Add(240*time.Second-time.Nanosecond)))
-	require.True(t, s.due(now.Add(240*time.Second)))
+	s.observe(15001, now)
+	s.observe(15001, now)
+	require.False(t, s.due(now), "two slow samples do not rotate")
+	s.observe(15001, now)
+	require.True(t, s.due(now), "the third consecutive slow sample requests rotation")
+	s.rotate(nil, now)
+	require.False(t, s.due(now), "rotation clears the pending flag")
+	s.observe(15001, now)
+	s.observe(100, now)
+	s.observe(15001, now)
+	require.False(t, s.due(now), "a healthy sample resets the consecutive count")
 }
 
 func TestFirstServeReplayPreservesConversationAndTools(t *testing.T) {
@@ -229,7 +233,7 @@ func TestFirstServeIngressRotation(t *testing.T) {
 				}
 				for _, entry := range svc.openaiFirstServeHTTP.items {
 					entry.mu.Lock()
-					entry.state.status.ExpiresAt = time.Now().Add(-time.Second)
+					entry.state.status.RotationPending = true
 					entry.mu.Unlock()
 				}
 				ap := pool.getOrCreateAccountPool(account.ID)
@@ -237,7 +241,7 @@ func TestFirstServeIngressRotation(t *testing.T) {
 				defer ap.mu.Unlock()
 				for _, conn := range ap.conns {
 					if conn.firstServe != nil {
-						conn.firstServe.status.ExpiresAt = time.Now().Add(-time.Second)
+						conn.firstServe.status.RotationPending = true
 					}
 				}
 			}}
@@ -296,8 +300,12 @@ func TestFirstServeIngressRotation(t *testing.T) {
 			dialer.mu.Unlock()
 			routeID := headers[0].Get("session_id")
 			require.NotEmpty(t, routeID)
-			for _, header := range headers {
-				require.Equal(t, routeID, header.Get("session_id"), "proxy changes retain the wire routing ID")
+			for i, header := range headers {
+				if tc.wantRotation && i > 0 {
+					require.NotEqual(t, routeID, header.Get("session_id"), "proxy rotation starts a new routing session")
+				} else {
+					require.Equal(t, routeID, header.Get("session_id"))
+				}
 				if !tc.fingerprint {
 					require.Equal(t, "client-installation", header.Get("x-codex-installation-id"), "convergence off preserves the client fingerprint without repeated reconnects")
 				}
@@ -329,7 +337,7 @@ func TestFirstServeIngressRotation(t *testing.T) {
 			if !tc.session {
 				_, routed, route, routeErr := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(42, "another conversation"), account, nil)
 				require.NoError(t, routeErr)
-				require.Equal(t, routeID, route.id, "HTTP and WS share the account route")
+				require.Equal(t, headers[len(headers)-1].Get("session_id"), route.id, "HTTP and WS share the current account route")
 				if tc.fingerprint {
 					require.Equal(t, headers[len(headers)-1].Get("x-codex-installation-id"), route.fingerprint)
 				}
@@ -353,12 +361,19 @@ func TestFirstServeIngressRotation(t *testing.T) {
 			payload, err := json.Marshal(secondConn.lastWrite)
 			secondConn.mu.Unlock()
 			require.NoError(t, err)
-			require.Equal(t, routeID, gjson.GetBytes(payload, "prompt_cache_key").String())
+			require.Equal(t, headers[len(headers)-1].Get("session_id"), gjson.GetBytes(payload, "prompt_cache_key").String())
 			if tc.missingParent {
-				require.Equal(t, "resp_a", gjson.GetBytes(payload, "previous_response_id").String())
+				require.False(t, gjson.GetBytes(payload, "previous_response_id").Exists(), "proxy rotation starts a new response chain")
 				return
 			}
 			require.False(t, gjson.GetBytes(payload, "previous_response_id").Exists())
+			if tc.reconnect {
+				// The old physical connection is incompatible with the new routing identity.
+				// No local history is available on its replacement; use the supplied input.
+				require.Equal(t, int64(1), gjson.GetBytes(payload, "input.#").Int())
+				require.Equal(t, "question B", gjson.GetBytes(payload, "input.0.content").String())
+				return
+			}
 			require.Equal(t, int64(3), gjson.GetBytes(payload, "input.#").Int())
 			require.Equal(t, "question A", gjson.GetBytes(payload, "input.0.content").String())
 			require.Equal(t, "answer A", gjson.GetBytes(payload, "input.1.content.0.text").String())
