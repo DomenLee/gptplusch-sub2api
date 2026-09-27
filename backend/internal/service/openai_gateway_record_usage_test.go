@@ -2992,7 +2992,7 @@ func TestRecordUsagePreservesFirstServeRequestSnapshot(t *testing.T) {
 				Result: &OpenAIForwardResult{
 					Model: "gpt-5", Stream: tc.stream, FirstServeActive: tc.active,
 					FirstServeSnapshot: &OpenAIFirstServeUsageSnapshot{DurationSeconds: 427, ProxyName: "日本 1", ProxyAddress: "1.2.3.4:8080"},
-					Duration: time.Second, Usage: OpenAIUsage{InputTokens: 100, OutputTokens: 10},
+					Duration:           time.Second, Usage: OpenAIUsage{InputTokens: 100, OutputTokens: 10},
 				},
 				APIKey: &APIKey{ID: 20, UserID: 21, Group: &Group{RateMultiplier: 1}},
 				User:   &User{ID: 21},
