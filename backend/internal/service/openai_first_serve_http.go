@@ -224,8 +224,8 @@ func (s *OpenAIGatewayService) prepareFirstServeRoute(ctx context.Context, c *gi
 	copyAccount := *account
 	copyAccount.Proxy = state.proxy
 	if state.proxy == nil || state.due(now) {
-		// Rotation is requested only after three consecutive slow first-token
-		// samples. A successful rotation starts a new upstream response chain.
+		// Rotation is requested after three slow first-token samples in the
+		// current generation. Success starts a new upstream response chain.
 		proxy, selectErr := selectOpenAIFirstServeProxy(ctx, &copyAccount, state.status.ProxyID)
 		if selectErr != nil {
 			state.publish("proxy_unavailable", now)
@@ -272,7 +272,7 @@ func (s *OpenAIGatewayService) prepareFirstServeRoute(ctx context.Context, c *gi
 	return context.WithValue(ctx, openAIFirstServeHTTPKey{}, l), &copyAccount, l, nil
 }
 
-// Record first output timing and update the consecutive slow-request policy.
+// Record first output timing and update the cumulative slow-request count.
 func observeFirstServeHTTP(ctx context.Context, ms int) {
 	l := firstServeHTTPLease(ctx)
 	if l == nil || l.kind != "stream" {

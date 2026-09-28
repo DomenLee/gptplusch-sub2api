@@ -19,7 +19,7 @@ func TestFirstServeCustomTimings(t *testing.T) {
 		require.False(t, s.due(now))
 	}
 	s.observe(60000, now.Add(time.Minute))
-	require.True(t, s.due(now), "three consecutive slow samples request rotation")
+	require.True(t, s.due(now), "three slow samples request rotation")
 	require.Equal(t, now.Add(2*time.Minute), s.status.ExpiresAt)
 	s.rotate(&Proxy{ID: 2}, now.Add(2*time.Minute))
 	require.NotEqual(t, "route", s.status.ConnID)
@@ -61,7 +61,7 @@ func TestFirstServeConfigValidation(t *testing.T) {
 	require.NotEqual(t, cfg.key(1), cfg.key(2), "changing groups isolates old connections")
 }
 
-func TestFirstServeSlowThresholdResetsOnHealthySample(t *testing.T) {
+func TestFirstServeSlowThresholdAccumulatesAcrossHealthySamples(t *testing.T) {
 	for _, extra := range []map[string]any{
 		nil,
 		{"openai_first_serve": map[string]any{"ttl_minutes": 12}},
@@ -73,12 +73,12 @@ func TestFirstServeSlowThresholdResetsOnHealthySample(t *testing.T) {
 		s.observe(60000, now)
 		require.False(t, s.due(now))
 		s.observe(100, now)
-		require.False(t, s.due(now), "a healthy sample resets consecutive slow requests")
-		s.observe(60000, now)
-		s.observe(60000, now)
+		require.Equal(t, 2, s.status.SlowCount, "a healthy sample preserves the slow count")
+		require.False(t, s.due(now))
 		s.observe(60000, now)
 		require.True(t, s.due(now))
 		s.rotate(nil, now)
+		require.Zero(t, s.status.SlowCount)
 		require.False(t, s.due(now))
 	}
 }

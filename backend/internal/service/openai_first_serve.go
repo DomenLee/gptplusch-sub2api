@@ -19,8 +19,8 @@ import (
 
 const openAIFirstServeMaxReplay = 8 << 20
 
-// A healthy first token resets the consecutive slow-request count. Rotation
-// starts on the request after three consecutive samples above the threshold.
+// Slow first-token samples accumulate within the current routing generation.
+// Three samples request rotation on the next request, regardless of its age.
 const openAIFirstServeSlowRequestLimit = 3
 
 // OpenAIFirstServeUsageSnapshot is frozen when a request enters a first-serve
@@ -224,7 +224,6 @@ func (s *openAIFirstServeState) observe(ms int, now time.Time) {
 			s.status.RotationPending = true
 		}
 	} else if !s.status.RotationPending {
-		s.status.SlowCount = 0
 		s.status.Reason = "ready"
 	}
 	s.publish(s.status.Reason, now)

@@ -73,16 +73,20 @@ func TestFirstServeHTTPReuseRotationAndIsolation(t *testing.T) {
 	require.Equal(t, "first.test:8080", secondResult.FirstServeSnapshot.ProxyAddress)
 	require.GreaterOrEqual(t, secondResult.FirstServeSnapshot.DurationSeconds, 0)
 	require.False(t, second.entry.state.due(time.Now()), "one slow request must not rotate")
-	for range 2 {
-		_, _, slow, slowErr := svc.prepareFirstServeHTTP(ctx, firstServeHTTPContext(1, "session"), a, body)
-		require.NoError(t, slowErr)
-		slow.finish(&OpenAIForwardResult{FirstTokenMs: &ms}, nil)
+	for _, sample := range []int{100, 15001, 15000, 15001} {
+		_, _, lease, prepareErr := svc.prepareFirstServeHTTP(ctx, firstServeHTTPContext(1, "session"), a, body)
+		require.NoError(t, prepareErr)
+		require.Equal(t, first.id, lease.id, "keep the route until three slow requests accumulate")
+		lease.finish(&OpenAIForwardResult{FirstTokenMs: &sample}, nil)
 	}
 	_, copyC, third, err := svc.prepareFirstServeHTTP(ctx, firstServeHTTPContext(1, "session"), a, body)
 	require.NoError(t, err)
 	require.NotEqual(t, first.id, third.id, "rotation starts a new routing session")
 	require.NotEqual(t, *copyA.ProxyID, *copyC.ProxyID)
 	require.Equal(t, 1, third.entry.state.status.Rotations)
+	require.True(t, third.started.Before(expiry), "rotation must not wait for the 240-second period")
+	require.Zero(t, third.entry.state.status.SlowCount)
+	require.False(t, third.entry.state.status.RotationPending)
 	third.finish(nil, nil)
 	for _, c := range []*gin.Context{firstServeHTTPContext(2, "session"), firstServeHTTPContext(1, "other"), firstServeHTTPContext(1, "")} {
 		_, _, isolated, prepareErr := svc.prepareFirstServeHTTP(ctx, c, a, body)

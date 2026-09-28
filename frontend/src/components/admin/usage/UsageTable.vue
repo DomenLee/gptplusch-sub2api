@@ -634,7 +634,7 @@ const hasFirstServeSnapshot = (row: AdminUsageLog): boolean =>
 
 const firstServeBadgeLabel = (row: AdminUsageLog): string => {
   if (!hasFirstServeSnapshot(row)) return t('usage.firstServeActiveLegacy')
-  return t('usage.firstServeActive', { seconds: firstServeSeconds(row), proxy: firstServeProxy(row) })
+  return t('usage.firstServeActive', { proxy: row.first_serve_proxy_name?.trim() || t('usage.firstServeUnknownProxy') })
 }
 
 const firstServeBadgeHint = (row: AdminUsageLog): string => {

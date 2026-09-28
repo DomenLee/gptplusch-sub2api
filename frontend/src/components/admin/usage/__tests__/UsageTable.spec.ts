@@ -58,7 +58,8 @@ const messages: Record<string, string> = {
   'usage.stream': 'Stream',
   'usage.sync': 'Sync',
   'usage.nativeCompactionV2': 'Compaction',
-  'usage.firstServeActive': '首服-{seconds} s--{proxy}',
+  'usage.firstServeActive': '首服-{proxy}',
+  'usage.firstServeActiveHint': '本笔请求发生在首服组合第 {seconds} 秒，使用代理 {proxy}。',
   'admin.usage.billingModeToken': 'Token',
   'admin.usage.billingModePerRequest': 'Per request',
   'admin.usage.billingModeImage': 'Image',
@@ -137,7 +138,7 @@ describe('admin UsageTable tooltip', () => {
     const wrapper = mount(UsageTable, {
       props: {
         data: [
-          { ...baseImageRow, request_id: 'reused', stream: true, first_serve_active: true, first_serve_duration_seconds: 12, first_serve_proxy_name: 'Proxy A', first_serve_proxy_address: '1.2.3.4:8080' },
+          { ...baseImageRow, request_id: 'reused', stream: true, first_serve_active: true, first_serve_duration_seconds: 34574, first_serve_proxy_name: '日本 1', first_serve_proxy_address: '133.169.1.30:6973' },
           { ...baseImageRow, request_id: 'first-use', stream: true, first_serve_active: false },
           { ...baseImageRow, request_id: 'historical', stream: true, account: { extra: { openai_apikey_responses_websockets_v2_mode: 'first_serve' } } }
         ],
@@ -149,7 +150,8 @@ describe('admin UsageTable tooltip', () => {
       } }
     })
     expect(wrapper.findAll('[data-testid="first-serve-badge"]')).toHaveLength(1)
-    expect(wrapper.get('[data-testid="first-serve-badge"]').text()).toBe('首服-12 s--Proxy A · 1.2.3.4:8080')
+    expect(wrapper.get('[data-testid="first-serve-badge"]').text()).toBe('首服-日本 1')
+    expect(wrapper.get('[data-testid="first-serve-badge"]').attributes('title')).toBe('本笔请求发生在首服组合第 34574 秒，使用代理 日本 1 · 133.169.1.30:6973。')
     wrapper.unmount()
   })
 
