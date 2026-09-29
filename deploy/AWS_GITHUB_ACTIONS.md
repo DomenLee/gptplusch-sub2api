@@ -1,6 +1,8 @@
 # GitHub Actions to AWS production deployment
 
-Pushes to `custom-ui` build an immutable GHCR image and deploy that exact commit to the production EC2 instance through AWS Systems Manager Run Command.
+This is the retired AWS deployment reference. Production moved to Vultr on 2026-09-28; see [Vultr deployment](VULTR_GITHUB_ACTIONS.md). The AWS application remains stopped and its deployment lock remains held to prevent accidental writes to the old database.
+
+The former workflow built an immutable GHCR image for `custom-ui` and deployed that exact commit through AWS Systems Manager Run Command. The following AWS resources are retained for rollback operations, not current releases.
 
 ## Security boundary
 

@@ -19,6 +19,8 @@ jobs:
         run: |
           /bin/bash -n deploy/aws-ssm-deploy.sh
           /bin/bash deploy/tests/aws-ssm-deploy-test.sh
+          /bin/bash -n deploy/vultr-ssh-deploy.sh
+          /bin/bash -n deploy/vultr-ssh-command.sh
           /bin/bash -n deploy/apple-container.sh
           /bin/bash deploy/tests/apple-container-test.sh
           /bin/sh deploy/tests/docker-compose-security-test.sh
