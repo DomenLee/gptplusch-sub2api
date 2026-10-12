@@ -195,6 +195,22 @@ async function openCodexImportStep(toggleClicks = 0) {
 }
 
 describe('CreateAccountModal OpenAI long-context billing', () => {
+  it('creates an API key with temporary scheduling disabled and resets the toggle', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Always available key')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await wrapper.get('[data-testid="temp-unschedulable-disabled"]').setValue(true)
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials?.temp_unschedulable_disabled).toBe(true)
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    expect(wrapper.get<HTMLInputElement>('[data-testid="temp-unschedulable-disabled"]').element.checked).toBe(false)
+    wrapper.unmount()
+  })
+
   beforeEach(() => {
     authIsSimpleMode.value = true
     createAccountMock.mockReset().mockResolvedValue({ id: 42, platform: 'openai', type: 'apikey' })

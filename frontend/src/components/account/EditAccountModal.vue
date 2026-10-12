@@ -1429,8 +1429,16 @@
         </div>
       </div>
 
+      <div v-if="!isSparkShadow" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <label class="flex items-center gap-3">
+          <input v-model="tempUnschedDisabled" data-testid="temp-unschedulable-disabled" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+          <span class="input-label mb-0">{{ t('admin.accounts.tempUnschedulable.neverDisable') }}</span>
+        </label>
+        <p class="input-hint">{{ t('admin.accounts.tempUnschedulable.neverDisableHint') }}</p>
+      </div>
+
       <!-- Temp Unschedulable Rules -->
-      <div data-testid="temp-unschedulable-settings" class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
+      <div v-show="!tempUnschedDisabled" data-testid="temp-unschedulable-settings" class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
         <div class="mb-3 flex items-center justify-between">
           <div>
             <label class="input-label mb-0">{{ t('admin.accounts.tempUnschedulable.title') }}</label>
@@ -3664,6 +3672,7 @@ const antigravityWhitelistModels = ref<string[]>([])
 const antigravityModelMappings = ref<ModelMapping[]>([])
 const isSyncingAntigravityUpstream = ref(false)
 const tempUnschedEnabled = ref(false)
+const tempUnschedDisabled = ref(false)
 const accountSchedulingThresholdOverrideEnabled = ref(false)
 const accountSchedulingThresholdOverrideValue = ref(100)
 const ACCOUNT_SCHEDULING_THRESHOLD_CREDENTIAL_KEY = 'account_scheduling_threshold'
@@ -4815,6 +4824,9 @@ const buildTempUnschedRules = (rules: TempUnschedRuleForm[]) => {
 }
 
 const applyTempUnschedConfig = (credentials: Record<string, unknown>) => {
+  if (tempUnschedDisabled.value) credentials.temp_unschedulable_disabled = true
+  else delete credentials.temp_unschedulable_disabled
+  if (tempUnschedDisabled.value) return true
   if (!tempUnschedEnabled.value) {
     delete credentials.temp_unschedulable_enabled
     delete credentials.temp_unschedulable_rules
@@ -4896,6 +4908,7 @@ const applyAccountSchedulingThresholdOverridePatch = (
 }
 
 function loadTempUnschedRules(credentials?: Record<string, unknown>) {
+  tempUnschedDisabled.value = credentials?.temp_unschedulable_disabled === true
   tempUnschedEnabled.value = credentials?.temp_unschedulable_enabled === true
   const rawRules = credentials?.temp_unschedulable_rules
   if (!Array.isArray(rawRules)) {

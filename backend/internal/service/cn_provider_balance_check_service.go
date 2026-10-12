@@ -229,6 +229,9 @@ func (s *CNProviderBalanceCheckService) checkOne(ctx context.Context, account *A
 	// 阈值（或不可用）才停调。
 	low := !result.Available || allCNBalancesBelowThreshold(result, threshold)
 	if low {
+		if account.IsTempUnschedulableDisabled() {
+			return cnBalanceNoChange
+		}
 		// 已被（任何来源）停调时不覆盖其 reason。
 		if !account.IsSchedulable() {
 			return cnBalanceNoChange

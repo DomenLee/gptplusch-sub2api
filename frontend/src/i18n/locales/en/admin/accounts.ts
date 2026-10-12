@@ -407,6 +407,8 @@ export default {
         },
       },
       tempUnschedulable: {
+        neverDisable: 'Never temporarily unschedule',
+        neverDisableHint: 'Skip temporary scheduling rules, health breakers, stream timeout and proxy failure cooldowns. Saving clears the existing account cooldown. Standard rate limits, quotas, manual pauses and credential errors still apply.',
         title: 'Temp Unschedulable',
         statusTitle: 'Temp Unschedulable Status',
         hint: 'Disable accounts temporarily when error code and keyword both match.',

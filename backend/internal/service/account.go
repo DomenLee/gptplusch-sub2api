@@ -195,13 +195,23 @@ func (a *Account) IsSchedulable() bool {
 	if a.RateLimitResetAt != nil && now.Before(*a.RateLimitResetAt) {
 		return false
 	}
-	if a.TempUnschedulableUntil != nil && now.Before(*a.TempUnschedulableUntil) {
+	if !a.IsTempUnschedulableDisabled() && a.TempUnschedulableUntil != nil && now.Before(*a.TempUnschedulableUntil) {
 		return false
 	}
 	if a.IsAPIKeyOrBedrock() && a.IsQuotaExceeded() {
 		return false
 	}
 	return true
+}
+
+// IsTempUnschedulableDisabled reports whether this account opts out of
+// account-level temporary scheduling blocks.
+func (a *Account) IsTempUnschedulableDisabled() bool {
+	if a == nil || a.Credentials == nil {
+		return false
+	}
+	enabled, ok := a.Credentials["temp_unschedulable_disabled"].(bool)
+	return ok && enabled
 }
 
 // IsCredentialUsableForShadow 报告本账号(作为某 spark 影子的母账号)的凭据/传输是否可被影子透传使用。
@@ -224,7 +234,7 @@ func (a *Account) IsCredentialUsableForShadow() bool {
 	if a.AutoPauseOnExpired && a.ExpiresAt != nil && !now.Before(*a.ExpiresAt) {
 		return false
 	}
-	if a.TempUnschedulableUntil != nil && now.Before(*a.TempUnschedulableUntil) {
+	if !a.IsTempUnschedulableDisabled() && a.TempUnschedulableUntil != nil && now.Before(*a.TempUnschedulableUntil) {
 		return false
 	}
 	return true

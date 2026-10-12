@@ -325,7 +325,7 @@ func openAIOAuth429SameAccountRetryDelay(headers http.Header, deadline time.Time
 }
 
 func (s *OpenAIGatewayService) BlockAccountScheduling(account *Account, until time.Time, reason string) {
-	if s == nil || !isOpenAIAccount(account) {
+	if s == nil || !isOpenAIAccount(account) || account.IsTempUnschedulableDisabled() {
 		return
 	}
 	mu := s.openAIAccountRuntimeBlockLock(account.ID)
@@ -392,6 +392,12 @@ func (s *OpenAIGatewayService) ClearAccountSchedulingBlock(accountID int64) {
 }
 
 func (s *OpenAIGatewayService) isOpenAIAccountRuntimeBlocked(account *Account) bool {
+	if account == nil {
+		return false
+	}
+	if account.IsTempUnschedulableDisabled() && !accountPersistedSchedulingCooldownActive(account) {
+		return false
+	}
 	if s == nil || !isOpenAIAccount(account) {
 		return false
 	}
@@ -479,6 +485,9 @@ func (s *OpenAIGatewayService) isOpenAIAccountModelRuntimeBlocked(account *Accou
 
 func accountPersistedSchedulingCooldownActive(account *Account) bool {
 	if account == nil {
+		return false
+	}
+	if account.IsTempUnschedulableDisabled() {
 		return false
 	}
 	now := time.Now()

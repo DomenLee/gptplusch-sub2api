@@ -455,6 +455,8 @@ export default {
         tempUnschedulableUntil: '预计 {time} 恢复'
       },
       tempUnschedulable: {
+        neverDisable: '永不触发临时不可调度',
+        neverDisableHint: '开启后跳过临时停调规则、健康熔断、流超时及代理故障冷却，保存时解除已有账号临时停调。正常限流、配额限制、手动停用及凭据错误仍按原策略处理。',
         title: '临时不可调度',
         statusTitle: '临时不可调度状态',
         hint: '当错误码与关键词同时匹配时，账号会在指定时间内被临时禁用。',

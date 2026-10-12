@@ -2454,8 +2454,16 @@
         </template>
       </div>
 
+      <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <label class="flex items-center gap-3">
+          <input v-model="tempUnschedDisabled" data-testid="temp-unschedulable-disabled" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+          <span class="input-label mb-0">{{ t('admin.accounts.tempUnschedulable.neverDisable') }}</span>
+        </label>
+        <p class="input-hint">{{ t('admin.accounts.tempUnschedulable.neverDisableHint') }}</p>
+      </div>
+
       <!-- Temp Unschedulable Rules -->
-      <div data-testid="temp-unschedulable-settings" class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
+      <div v-show="!tempUnschedDisabled" data-testid="temp-unschedulable-settings" class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
         <div class="mb-3 flex items-center justify-between">
           <div>
             <label class="input-label mb-0">{{ t('admin.accounts.tempUnschedulable.title') }}</label>
@@ -4550,6 +4558,7 @@ const vertexClientEmail = ref('')
 const vertexLocation = ref('global')
 const vertexServiceAccountDragActive = ref(false)
 const tempUnschedEnabled = ref(false)
+const tempUnschedDisabled = ref(false)
 const tempUnschedRules = ref<TempUnschedRuleForm[]>([])
 const getModelMappingKey = createStableObjectKeyResolver<ModelMapping>('create-model-mapping')
 const getOpenAICompactModelMappingKey = createStableObjectKeyResolver<ModelMapping>('create-openai-compact-model-mapping')
@@ -5213,6 +5222,9 @@ const buildTempUnschedRules = (rules: TempUnschedRuleForm[]) => {
 }
 
 const applyTempUnschedConfig = (credentials: Record<string, unknown>) => {
+  if (tempUnschedDisabled.value) credentials.temp_unschedulable_disabled = true
+  else delete credentials.temp_unschedulable_disabled
+  if (tempUnschedDisabled.value) return true
   if (!tempUnschedEnabled.value) {
     delete credentials.temp_unschedulable_enabled
     delete credentials.temp_unschedulable_rules
@@ -5470,6 +5482,7 @@ const resetForm = () => {
   vertexProjectId.value = ''
   vertexClientEmail.value = ''
   vertexLocation.value = 'global'
+  tempUnschedDisabled.value = false
   tempUnschedEnabled.value = false
   tempUnschedRules.value = []
   geminiOAuthType.value = 'code_assist'
@@ -7097,7 +7110,7 @@ const handleCookieAuth = async (sessionKey: string) => {
     const tempUnschedPayload = tempUnschedEnabled.value
       ? buildTempUnschedRules(tempUnschedRules.value)
       : []
-    if (tempUnschedEnabled.value && tempUnschedPayload.length === 0) {
+    if (!tempUnschedDisabled.value && tempUnschedEnabled.value && tempUnschedPayload.length === 0) {
       appStore.showError(t('admin.accounts.tempUnschedulable.rulesInvalid'))
       return
     }
@@ -7181,6 +7194,7 @@ const handleCookieAuth = async (sessionKey: string) => {
 
         const credentials: Record<string, unknown> = { ...tokenInfo }
         applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
+        if (tempUnschedDisabled.value) credentials.temp_unschedulable_disabled = true
         if (tempUnschedEnabled.value) {
           credentials.temp_unschedulable_enabled = true
           credentials.temp_unschedulable_rules = tempUnschedPayload

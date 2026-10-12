@@ -326,6 +326,28 @@ function mountModal(account = buildAccount(), renderGroupSelector = false) {
 }
 
 describe('EditAccountModal', () => {
+  it('saves the temporary scheduling opt-out and allows turning it off again', async () => {
+    const account = buildAccount()
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    const toggle = wrapper.get<HTMLInputElement>('[data-testid="temp-unschedulable-disabled"]')
+    expect(toggle.element.checked).toBe(false)
+    await toggle.setValue(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.temp_unschedulable_disabled).toBe(true)
+    wrapper.unmount()
+
+    account.credentials.temp_unschedulable_disabled = true
+    updateAccountMock.mockClear()
+    const reopened = mountModal(account)
+    expect(reopened.get<HTMLInputElement>('[data-testid="temp-unschedulable-disabled"]').element.checked).toBe(true)
+    await reopened.get('[data-testid="temp-unschedulable-disabled"]').setValue(false)
+    await reopened.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).not.toHaveProperty('temp_unschedulable_disabled')
+    reopened.unmount()
+  })
+
   beforeEach(() => {
     authIsSimpleMode.value = true
   })
