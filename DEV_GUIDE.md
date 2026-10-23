@@ -263,20 +263,20 @@ psql -U sub2api -h 127.0.0.1 -d sub2api -f migration.sql
 
 ### Git 操作
 
+所有业务改动及上游升级均通过 PR 合并到 `origin/main`，禁止直接推送 main。生产只由 main 的 GitHub Actions 构建与部署，完整规范见 `AGENTS.md` 和 `deploy/VULTR_GITHUB_ACTIONS.md`。
+
 ```bash
-# 同步上游
-git fetch upstream
-git checkout main
-git merge upstream/main
-git push origin main
-
-# 创建功能分支
-git checkout -b feature/xxx
-
-# Rebase 到最新 main
-git fetch upstream
-git rebase upstream/main
+git fetch origin main
+git switch -c codex/xxx origin/main
+git fetch upstream --tags
+git merge v0.2.18
+git push -u origin HEAD
+gh pr create --base main
 ```
+
+`v0.2.18` 是稳定版升级示例，实际升级前必须核实上游最新稳定 Release，并同步 `backend/cmd/server/VERSION`；不得直接合并未发布的 upstream/main 代替稳定版。PR 的 CI 和安全检查通过后再合并，常规功能开发不需要执行合并上游 tag 的命令。
+
+同步开发分支时使用 `git fetch origin main` 和 `git rebase origin/main`，避免丢失本项目已合入 main 的定制功能。
 
 ### 前端操作
 
