@@ -51,6 +51,16 @@ function makeAccount(overrides: Partial<Account>): Account {
 }
 
 describe('AccountStatusIndicator', () => {
+  it('shows automatic downgrade results and a visible failure alert', async () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: { account: makeAccount({ platform: 'openai', extra: { openai_auto_group_state: { status: 'downgraded', at: '2026-10-23T00:00:00Z', status_code: 503, failure_count: 3, window_minutes: 5, message: 'overloaded' } } }) },
+      global: { stubs: { Icon: true } },
+    })
+    expect(wrapper.text()).toContain('admin.settings.openaiAutoGroup.downgraded')
+    await wrapper.setProps({ account: makeAccount({ platform: 'openai', extra: { openai_auto_group_state: { status: 'failed', at: '2026-10-23T00:00:00Z', status_code: 503, failure_count: 3, window_minutes: 5, message: 'no low-rate groups' } } }) })
+    expect(wrapper.get('[role="alert"]').text()).toContain('admin.settings.openaiAutoGroup.accountFailed')
+    wrapper.unmount()
+  })
   it('Claude 5 系列模型限流时显示 Opus 和 Sonnet 的短别名', () => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {

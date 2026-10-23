@@ -1,5 +1,11 @@
 <template>
   <div class="flex items-center gap-2">
+    <span v-if="autoGroupState?.status === 'downgraded'" class="badge badge-warning text-xs" :title="autoGroupState.at">
+      {{ t('admin.settings.openaiAutoGroup.downgraded') }}
+    </span>
+    <div v-else-if="autoGroupState?.status === 'failed'" role="alert" class="max-w-sm rounded border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+      {{ t('admin.settings.openaiAutoGroup.accountFailed', { name: account.name, id: account.id, reason: autoGroupState.message }) }}
+    </div>
     <!-- Rate Limit Display (429) - Two-line layout -->
     <div v-if="isRateLimited" class="flex flex-col items-center gap-1">
       <span class="badge text-xs badge-warning">{{ t('admin.accounts.status.rateLimited') }}</span>
@@ -170,6 +176,8 @@ const { t } = useI18n()
 const props = defineProps<{
   account: Account
 }>()
+
+const autoGroupState = computed(() => props.account.platform === 'openai' ? props.account.extra?.openai_auto_group_state : undefined)
 
 const emit = defineEmits<{
   (e: 'show-temp-unsched', account: Account): void

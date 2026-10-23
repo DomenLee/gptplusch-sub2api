@@ -566,6 +566,13 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 
 	// 绑定分组
 	groupIDs := input.GroupIDs
+	if len(groupIDs) == 0 && !input.SkipDefaultGroupBind {
+		defaults, _, err := openAIDefaultHighRateGroups(ctx, s.settingService, s.groupRepo, input.Platform, input.Type)
+		if err != nil {
+			return nil, err
+		}
+		groupIDs = defaults
+	}
 	// 如果没有指定分组,自动绑定对应平台的默认分组
 	if len(groupIDs) == 0 && !input.SkipDefaultGroupBind {
 		defaultGroupName := input.Platform + "-default"
@@ -619,6 +626,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
 			return nil, err
 		}
+		account.GroupIDs = append([]int64(nil), groupIDs...)
 	}
 
 	// OAuth 账号：创建后异步设置隐私。

@@ -1262,6 +1262,16 @@ export interface Account {
   opencode_go_usage?: OpenCodeGoUsageState
   // Extra fields including Codex usage, OpenAI compact capability, and model-level rate limits.
   extra?: (CodexUsageSnapshot & OpenAICompactState & {
+    openai_auto_group_state?: {
+      status: 'downgraded' | 'failed'
+      at: string
+      status_code: number
+      failure_count: number
+      window_minutes: number
+      message: string
+      from_group_ids?: number[]
+      to_group_ids?: number[]
+    }
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
     antigravity_credits_overages?: Record<string, { activated_at: string; active_until: string }>
     upstream_billing_probe_enabled?: boolean

@@ -143,6 +143,10 @@ func (l *openAIFirstServeHTTPLease) release() {
 }
 
 func (s *OpenAIGatewayService) prepareFirstServeHTTP(ctx context.Context, c *gin.Context, account *Account, body []byte) (context.Context, *Account, *openAIFirstServeHTTPLease, error) {
+	ctx = withOpenAIAutoGroupRequest(ctx, c)
+	if err := s.checkOpenAIAutoGroupMembership(ctx, account); err != nil {
+		return ctx, account, nil, err
+	}
 	if c == nil || c.Request == nil || GetOpenAIClientTransport(c) == OpenAIClientTransportWS {
 		return ctx, account, nil, nil
 	}

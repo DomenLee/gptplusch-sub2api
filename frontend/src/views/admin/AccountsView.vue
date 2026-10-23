@@ -2,6 +2,12 @@
   <AppLayout>
     <TablePageLayout>
       <template #filters>
+        <div v-if="autoGroupFailures.length" role="alert" class="mb-3 max-h-40 overflow-y-auto rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+          <div v-for="account in autoGroupFailures" :key="account.id" class="flex items-start justify-between gap-3 py-1">
+            <span>{{ t('admin.settings.openaiAutoGroup.accountFailed', { name: account.name, id: account.id, reason: account.extra?.openai_auto_group_state?.message }) }}</span>
+            <button type="button" class="shrink-0 underline" @click="handleEdit(account)">{{ t('admin.settings.openaiAutoGroup.editGroups') }}</button>
+          </div>
+        </div>
         <div class="flex flex-wrap-reverse items-start justify-between gap-3">
           <AccountTableFilters
             class="lg:w-auto lg:flex-1"
@@ -1103,6 +1109,8 @@ const {
     sort_order: sortState.sort_order
   }
 })
+
+const autoGroupFailures = computed(() => accounts.value.filter(account => account.platform === 'openai' && account.extra?.openai_auto_group_state?.status === 'failed'))
 
 const {
   selectedSet,

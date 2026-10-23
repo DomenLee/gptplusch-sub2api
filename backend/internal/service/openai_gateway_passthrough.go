@@ -1635,6 +1635,9 @@ func (s *OpenAIGatewayService) handleOpenAIStreamTerminalAccountSideEffects(
 	canonicalModel ...string,
 ) (int, bool) {
 	statusCode := openAIStreamFailureStatus(payload, message)
+	if c != nil && c.Request != nil {
+		s.observeOpenAIAutoGroupFailure(c.Request.Context(), account, statusCode, payload)
+	}
 	switch statusCode {
 	case http.StatusForbidden:
 		if !openAIStream403AccountFailure(payload, message) {

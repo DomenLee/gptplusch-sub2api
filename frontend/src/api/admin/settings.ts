@@ -1327,6 +1327,23 @@ export interface RateLimit429CooldownSettings {
   cooldown_seconds: number;
 }
 
+export interface OpenAIAutoGroupSettings {
+  default_high_rate: boolean;
+  enabled: boolean;
+  window_minutes: number;
+  failure_threshold: number;
+}
+
+export async function getOpenAIAutoGroupSettings(): Promise<OpenAIAutoGroupSettings> {
+  const { data } = await apiClient.get<OpenAIAutoGroupSettings>("/admin/settings/openai-auto-group");
+  return data;
+}
+
+export async function updateOpenAIAutoGroupSettings(settings: OpenAIAutoGroupSettings): Promise<OpenAIAutoGroupSettings> {
+  const { data } = await apiClient.put<OpenAIAutoGroupSettings>("/admin/settings/openai-auto-group", settings);
+  return data;
+}
+
 export async function getRateLimit429CooldownSettings(): Promise<RateLimit429CooldownSettings> {
   const { data } = await apiClient.get<RateLimit429CooldownSettings>(
     "/admin/settings/rate-limit-429-cooldown",
@@ -1603,6 +1620,8 @@ export const settingsAPI = {
   updateOverloadCooldownSettings,
   getRateLimit429CooldownSettings,
   updateRateLimit429CooldownSettings,
+  getOpenAIAutoGroupSettings,
+  updateOpenAIAutoGroupSettings,
   getPanelRateLimitSettings,
   updatePanelRateLimitSettings,
   getStreamTimeoutSettings,

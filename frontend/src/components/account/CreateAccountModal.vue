@@ -3777,8 +3777,13 @@
         </div>
 
         <!-- Group Selection - 仅标准模式显示 -->
+        <p v-if="autoGroupSettingsError && form.platform === 'openai'" role="alert" class="mb-3 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+          {{ autoGroupSettingsError }}
+          <button type="button" class="ml-2 underline" @click="loadAutoGroupDefaults">{{ t('admin.settings.openaiAutoGroup.retry') }}</button>
+        </p>
         <GroupSelector
           v-model="form.group_ids"
+          @update:model-value="autoGroupSelectionTouched = true"
           :groups="groups"
           :platform="form.platform"
           :mixed-scheduling="mixedScheduling"
@@ -4190,6 +4195,7 @@ import FirstServeSettings from '@/components/account/FirstServeSettings.vue'
 import { readFirstServeConfig } from '@/utils/firstServe'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
+import { defaultOpenAIHighRateGroupIDs } from '@/components/account/openaiAutoGroups'
 import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import Toggle from '@/components/common/Toggle.vue'
@@ -5123,6 +5129,54 @@ const canExchangeCode = computed(() => {
 })
 
 // Watchers
+const autoGroupSelectionTouched = ref(false)
+const autoGroupDefaultHighRate = ref(false)
+const autoGroupDefaultIDs = ref<number[]>([])
+const autoGroupSettingsError = ref('')
+let autoGroupLoadSequence = 0
+
+async function loadAutoGroupDefaults() {
+  const sequence = ++autoGroupLoadSequence
+  autoGroupSettingsError.value = ''
+  autoGroupDefaultHighRate.value = false
+  try {
+    const settings = await adminAPI.settings.getOpenAIAutoGroupSettings()
+    if (sequence !== autoGroupLoadSequence || !props.show) return
+    autoGroupDefaultHighRate.value = settings.default_high_rate
+  } catch {
+    if (sequence !== autoGroupLoadSequence || !props.show) return
+    autoGroupSettingsError.value = t('admin.settings.openaiAutoGroup.loadFailed')
+  }
+}
+
+watch(
+  [() => props.show, () => form.platform],
+  ([show, platform]) => {
+    if (!show || platform !== 'openai') {
+      autoGroupLoadSequence++
+      return
+    }
+    void loadAutoGroupDefaults()
+  },
+  { immediate: true }
+)
+
+watch(
+  [autoGroupDefaultHighRate, () => props.groups, () => form.type, () => form.platform],
+  () => {
+    if (!props.show || autoGroupSelectionTouched.value) return
+    if (form.platform !== 'openai' || !autoGroupDefaultHighRate.value) {
+      const defaults = new Set(autoGroupDefaultIDs.value)
+      form.group_ids = form.group_ids.filter(id => !defaults.has(id))
+      autoGroupDefaultIDs.value = []
+      return
+    }
+    autoGroupDefaultIDs.value = defaultOpenAIHighRateGroupIDs(props.groups, form.type)
+    form.group_ids = [...autoGroupDefaultIDs.value]
+  },
+  { deep: true }
+)
+
 watch(
   () => props.show,
   (newVal) => {
@@ -5146,6 +5200,10 @@ watch(
         antigravityModelRestrictionMode.value = 'mapping'
       }
     } else {
+      autoGroupSelectionTouched.value = false
+      autoGroupDefaultHighRate.value = false
+      autoGroupDefaultIDs.value = []
+      autoGroupSettingsError.value = ''
       resetForm()
     }
   }

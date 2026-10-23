@@ -83,6 +83,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if account == nil {
 		return errors.New("account is nil")
 	}
+	ctx = withOpenAIAutoGroupRequest(ctx, c)
+	hooks = s.openAIAutoGroupWSHooks(ctx, account, hooks)
+	if err := s.checkOpenAIAutoGroupMembership(ctx, account); err != nil {
+		return err
+	}
 	var firstServe *openAIFirstServeState
 	var firstServeRoute *openAIFirstServeHTTPLease
 	routeOptions := openAIFirstServeRouteOptions{fallbackScope: "ws:" + generateRequestID(), webSocket: true}

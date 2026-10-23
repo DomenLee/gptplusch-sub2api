@@ -411,6 +411,8 @@
             </div>
           </div>
 
+          <OpenAIAutoGroupSettings />
+
           <!-- Stream Timeout Settings -->
           <div class="card">
             <div
@@ -8972,6 +8974,7 @@ import {
   type RechargeBonusTierDraft,
 } from "@/utils/rechargeBonus";
 import OpenAIFastPolicyUserSelector from "@/views/admin/settings/OpenAIFastPolicyUserSelector.vue";
+import OpenAIAutoGroupSettings from "@/views/admin/settings/OpenAIAutoGroupSettings.vue";
 import { useClipboard } from "@/composables/useClipboard";
 import {
   useStepUp,

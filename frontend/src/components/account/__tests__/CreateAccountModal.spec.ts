@@ -14,6 +14,7 @@ const {
   showWarningMock,
   importCodexSessionMock,
   createOpenAICodexPATMock,
+  getAutoGroupSettingsMock,
   authIsSimpleMode,
 } = vi.hoisted(() => ({
   createAccountMock: vi.fn(),
@@ -22,6 +23,7 @@ const {
   showWarningMock: vi.fn(),
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
+  getAutoGroupSettingsMock: vi.fn().mockResolvedValue({ default_high_rate: false, enabled: false, window_minutes: 5, failure_threshold: 3 }),
   authIsSimpleMode: { value: true },
 }))
 
@@ -52,6 +54,7 @@ vi.mock('@/api/admin', () => ({
       createOpenAICodexPAT: createOpenAICodexPATMock,
     },
     settings: {
+      getOpenAIAutoGroupSettings: getAutoGroupSettingsMock,
       getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false, providers: [] }),
       getSettings: vi.fn().mockResolvedValue({}),
     },
@@ -200,6 +203,29 @@ async function openCodexImportStep(toggleClicks = 0) {
 }
 
 describe('CreateAccountModal OpenAI long-context billing', () => {
+  it('defaults new GPT accounts by multiplier and preserves manually selected groups', async () => {
+    getAutoGroupSettingsMock.mockResolvedValue({ default_high_rate: true, enabled: false, window_minutes: 5, failure_threshold: 3 })
+    const wrapper = mountModal([
+      { id: 1, name: '不降智', platform: 'openai', status: 'active', rate_multiplier: 1.5 },
+      { id: 2, name: '2x', platform: 'openai', status: 'active', rate_multiplier: 2 },
+      { id: 3, name: '自用', platform: 'openai', status: 'active', rate_multiplier: 3 },
+      { id: 4, name: 'virtual', platform: 'openai', status: 'active', rate_multiplier: 3, auto_route_enabled: true },
+    ])
+    await selectButtonByText(wrapper, 'OpenAI')
+    await flushPromises()
+    expect(wrapper.findComponent(GroupSelectorStub).props('modelValue')).toEqual([3])
+    await selectButtonByText(wrapper, 'Anthropic')
+    await flushPromises()
+    expect(wrapper.findComponent(GroupSelectorStub).props('modelValue')).toEqual([])
+    await selectButtonByText(wrapper, 'OpenAI')
+    await flushPromises()
+    expect(wrapper.findComponent(GroupSelectorStub).props('modelValue')).toEqual([3])
+    await wrapper.get('[data-testid="select-pricing-groups"]').trigger('click')
+    await selectButtonByText(wrapper, 'API Key')
+    await flushPromises()
+    expect(wrapper.findComponent(GroupSelectorStub).props('modelValue')).toEqual([1, 2])
+    wrapper.unmount()
+  })
   it('creates an API key with temporary scheduling disabled and resets the toggle', async () => {
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'OpenAI')
@@ -217,6 +243,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
   })
 
   beforeEach(() => {
+    getAutoGroupSettingsMock.mockReset().mockResolvedValue({ default_high_rate: false, enabled: false, window_minutes: 5, failure_threshold: 3 })
     authIsSimpleMode.value = true
     createAccountMock.mockReset().mockResolvedValue({ id: 42, platform: 'openai', type: 'apikey' })
     probeUpstreamBillingMock.mockReset().mockResolvedValue({})
