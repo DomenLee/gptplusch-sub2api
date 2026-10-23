@@ -3,13 +3,6 @@
     <div class="store-page">
       <div class="card store-card">
         <div class="store-toolbar">
-          <div class="store-service-notice" role="note">
-            <Icon name="clock" size="sm" class="flex-shrink-0 text-amber-600 dark:text-amber-400" />
-            <p>
-              <strong>{{ t('store.serviceHoursTitle') }}</strong>
-              <span>{{ t('store.serviceHoursDescription') }}</span>
-            </p>
-          </div>
           <a
             :href="storeUrl"
             target="_blank"
@@ -81,18 +74,6 @@ const handleLoad = () => {
   @apply flex flex-shrink-0 items-center justify-between gap-4 border-b border-gray-100 px-4 py-3 dark:border-dark-700;
 }
 
-.store-service-notice {
-  @apply flex min-w-0 items-center gap-2 text-sm text-amber-800 dark:text-amber-300;
-}
-
-.store-service-notice p {
-  @apply m-0 leading-6;
-}
-
-.store-service-notice strong {
-  @apply mr-1 font-semibold;
-}
-
 .store-toolbar .btn {
   @apply flex-shrink-0;
 }
@@ -109,13 +90,4 @@ const handleLoad = () => {
   @apply block h-full w-full border-0;
 }
 
-@media (max-width: 640px) {
-  .store-toolbar {
-    @apply items-start;
-  }
-
-  .store-service-notice {
-    @apply items-start;
-  }
-}
 </style>
