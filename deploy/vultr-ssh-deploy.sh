@@ -9,6 +9,18 @@ validate_target() {
     [[ "$2" == "ghcr.io/domenlee/sub2api:$1" ]]
 }
 
+verify_main_commit() {
+  local target_sha="$1" main_sha
+  main_sha="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 --retry 2 \
+    -H 'Accept: application/vnd.github+json' \
+    https://api.github.com/repos/DomenLee/gptplusch-sub2api/git/ref/heads/main \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["object"]["sha"])')" || return 1
+  if [[ "$main_sha" != "$target_sha" ]]; then
+    echo "Deployment rejected: ${target_sha} is not the latest main commit (${main_sha}); deploy through the main GitHub Actions workflow." >&2
+    return 1
+  fi
+}
+
 render_compose() {
   python3 - "$1" "$2" "$3" <<'PY'
 import json
@@ -49,10 +61,11 @@ main() {
   local image="${2:?target image is required}"
   local deploy_dir="${DEFAULT_DEPLOY_DIR}"
   local compose_file="${deploy_dir}/compose.production.json"
-  local old_image database_user database_name stamp backup_dir candidate started_at
+  local old_image database_user database_name stamp backup_dir candidate started_at version
   local rollback_required=0
 
   validate_target "${target_sha}" "${image}"
+  verify_main_commit "${target_sha}"
   [[ "${EUID}" == 0 ]]
   test -f "${compose_file}"
   umask 077
@@ -78,6 +91,9 @@ print(env["DATABASE_USER"] + "|" + env["DATABASE_DBNAME"])
 
   # Pull before taking backups or changing the running service.
   docker pull "${image}"
+  test "$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$target_sha"
+  version="$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')"
+  [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   backup_dir="${deploy_dir}/release-backups/${stamp}-${target_sha:0:12}"
   mkdir -p "${backup_dir}"
@@ -131,6 +147,7 @@ print(env["DATABASE_USER"] + "|" + env["DATABASE_DBNAME"])
     up -d --no-deps --force-recreate sub2api
   wait_for_health
   test "$(docker inspect sub2api --format '{{.Config.Image}}')" = "${image}"
+  docker exec sub2api /app/sub2api -version 2>&1 | grep -F "Sub2API ${version} (commit: ${target_sha},"
   docker exec sub2api wget -q -T 10 -O /dev/null http://127.0.0.1:8080/health
   docker exec sub2api-postgres pg_isready -U "${database_user}" -d "${database_name}"
   docker logs --since "${started_at}" sub2api > "${backup_dir}/startup.log" 2>&1

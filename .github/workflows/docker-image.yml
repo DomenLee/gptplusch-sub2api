@@ -3,7 +3,7 @@ name: Build Docker Image
 on:
   push:
     branches:
-      - custom-ui
+      - main
   workflow_dispatch:
 
 concurrency:
@@ -17,14 +17,30 @@ env:
   IMAGE_NAME: ghcr.io/domenlee/sub2api
 
 jobs:
+  prepare:
+    name: Validate production release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      date: ${{ steps.release.outputs.date }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate canonical version and main source
+        id: release
+        run: bash deploy/check-production-release.sh
+
   ci:
     name: Required CI
+    if: github.ref == 'refs/heads/main'
+    needs: prepare
     uses: ./.github/workflows/backend-ci.yml
     permissions:
       contents: read
 
   build:
-    needs: ci
+    if: github.ref == 'refs/heads/main'
+    needs: [prepare, ci]
     permissions:
       contents: read
       packages: write
@@ -50,6 +66,15 @@ jobs:
           file: Dockerfile
           push: true
           platforms: linux/amd64
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ needs.prepare.outputs.date }}
+          labels: |
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.created=${{ needs.prepare.outputs.date }}
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
@@ -58,7 +83,7 @@ jobs:
 
   deploy:
     name: Deploy to Vultr production
-    if: github.ref == 'refs/heads/custom-ui'
+    if: github.ref == 'refs/heads/main'
     needs: build
     permissions:
       contents: read

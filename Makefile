@@ -12,6 +12,8 @@ FRONTEND_CRITICAL_VITEST := \
 	src/constants/__tests__/platforms.spec.ts \
 	src/components/account/__tests__/credentialsBuilder.platformCatalog.spec.ts \
 	src/components/account/__tests__/CreateAccountModal.spec.ts \
+	src/components/account/__tests__/AccountStatusIndicator.spec.ts \
+	src/components/account/__tests__/openaiAutoGroups.spec.ts \
 	src/components/account/__tests__/EditAccountModal.spec.ts \
 	src/components/account/__tests__/credentialsBuilder.spec.ts \
 	src/components/account/__tests__/OpenCodeGoProtocolRulesEditor.spec.ts \
@@ -27,6 +29,7 @@ FRONTEND_CRITICAL_VITEST := \
 	src/components/user/profile/__tests__/ProfileInfoCard.spec.ts \
 	src/components/user/profile/__tests__/ProfileIdentityBindingsSection.spec.ts \
 	src/views/admin/__tests__/SettingsView.spec.ts \
+	src/views/admin/settings/__tests__/OpenAIAutoGroupSettings.spec.ts \
 	src/features/channel-monitor-v2/__tests__/designSystem.structure.spec.ts \
 	src/features/channel-monitor-v2/__tests__/monitorFormat.spec.ts \
 	src/features/channel-monitor-v2/__tests__/monitorZoom.spec.ts \

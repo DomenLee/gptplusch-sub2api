@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches-ignore:
-      - custom-ui
+      - main
   pull_request:
   workflow_call:
 
@@ -11,6 +11,23 @@ permissions:
   contents: read
 
 jobs:
+  policy:
+    name: Release policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Require main as the pull request target
+        if: github.event_name == 'pull_request'
+        env:
+          TARGET_BRANCH: ${{ github.base_ref }}
+        run: |
+          if [[ "${TARGET_BRANCH}" != main ]]; then
+            echo "::error::Pull requests must target main; change the base branch before merging."
+            exit 1
+          fi
+      - name: Test production release policy
+        run: bash deploy/tests/production-release-test.sh
+
   shell:
     runs-on: macos-15
     steps:
@@ -20,6 +37,7 @@ jobs:
           /bin/bash -n deploy/aws-ssm-deploy.sh
           /bin/bash deploy/tests/aws-ssm-deploy-test.sh
           /bin/bash -n deploy/vultr-ssh-deploy.sh
+          /bin/bash deploy/tests/vultr-ssh-deploy-test.sh
           /bin/bash -n deploy/vultr-ssh-command.sh
           /bin/bash -n deploy/apple-container.sh
           /bin/bash deploy/tests/apple-container-test.sh

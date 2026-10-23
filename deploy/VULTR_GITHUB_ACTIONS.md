@@ -1,6 +1,16 @@
 # GitHub Actions → Vultr 自动部署
 
-`custom-ui` 的正常推送继续执行现有 CI 和 GHCR 镜像构建。构建成功后，GitHub Runner 通过 SSH 直连 Vultr，部署 `ghcr.io/domenlee/sub2api:<完整提交 SHA>`。发布链路不再使用 AWS、SSM 或 AWS OIDC。
+`main` 是唯一正式集成及生产发布分支。所有改动先通过 Pull Request 合并到 `main`，再由 GitHub Actions 执行版本校验、CI、GHCR 镜像构建和 Vultr 部署。生产只部署 `ghcr.io/domenlee/sub2api:<main 完整提交 SHA>`，不使用 `latest` 部署，也不从 `custom-ui` 发布。
+
+禁止使用本机二进制、工作区打包、SCP 覆盖应用或服务器现场源码构建代替 GitHub 构建部署。`workflow_dispatch` 手动重跑也必须选择 `main`。服务器部署入口再次检查 GitHub 远端 main 最新 SHA，不接受其他分支或已过期的发布提交。
+
+## 版本规范
+
+- `backend/cmd/server/VERSION` 保存标准稳定版本，例如 `0.2.18`；页面展示为 `v0.2.18`。
+- 版本必须与本次升级的上游稳定 Release 一致。上游 tag 对应源码的 VERSION 可能滞后一版，合并后应显式校正，不能只依赖构建 checkout 恰好落在 tag 上。
+- GitHub 在构建前验证版本只包含 `X.Y.Z`，显式注入 Docker build args `VERSION`、`COMMIT`、`DATE`。
+- 功能名、时间戳、分支名、构建号及提交 SHA 不得追加到展示版本；追踪信息保存在独立构建字段与 OCI 标签中。
+- `deploy/check-production-release.sh` 和对应测试负责拒绝非 main 来源、版本后缀、标签版本冲突及 checkout SHA 不一致。
 
 ## GitHub 仓库配置
 
@@ -33,17 +43,19 @@
 
 ## 每次发布行为
 
-1. 获取独占发布锁，拉取指定提交镜像。
+1. 核验目标是 GitHub 远端 main 最新提交，获取独占发布锁，拉取指定提交镜像。
 2. 从当前应用读取实际数据库名，备份 PostgreSQL、生产 Compose 和当前容器配置至 `release-backups/<时间>-<SHA>/`。
 3. 仅替换生产 JSON 中的 `services.sub2api.image`，保留全部其他运行配置。
 4. 仅重建应用容器，PostgreSQL、Redis、Caddy、CDK 和审核服务保持运行。
 5. 等待健康状态，检查实际镜像、数据库连通性和启动日志。
 6. 失败时恢复旧 Compose 和旧应用镜像。数据库备份保留，恢复数据需要人工处理，避免覆盖新写入。
 
-## 本次启用范围
+## 发布验收与失败处理
 
-本次迁移提交使用 `[skip ci]`，不运行 CI、构建、SSH 部署试跑或线上验证；当前运行的应用镜像保持原版本。正常自动部署由下一次未跳过 CI 的 `custom-ui` 推送触发，也可随后手动运行 `Build Docker Image`。
-
-AWS 原应用和旧部署锁继续保留，不应解除旧部署锁或直接恢复旧站写入。
-
-GitHub 对跳过提交的说明：[Skipping workflow runs](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/skip-workflow-runs)。
+- PR 的目标分支必须为 main，CI 检查通过后再合并；禁止使用 `[skip ci]` 跳过发布检查。
+- main 的 `Build Docker Image` 工作流全部成功后，核对运行容器镜像 tag 与本次 main SHA 相同。
+- 检查 `/health`、容器健康、数据库连通性、启动迁移日志、`/api/v1/admin/system/version` 的版本，以及镜像和二进制中的提交信息。
+- 升级至 v0.2.18 会执行上游迁移 246。混合分组若提供 Gemini 生图，需确认其「允许当前分组生图」开关；不要自动覆盖业务配置。
+- 失败时使用工作流和服务器 release-backups 中的日志定位；服务器脚本自动回滚应用，数据库恢复需要单独确认，不能覆盖新写入。
+- 新功能仍默认关闭；上线不等于获准启用 GPT 自动分组或更改既有功能配置。
+- 旧 AWS 应用和旧部署锁继续保留，不应解除旧锁或恢复旧站写入。
