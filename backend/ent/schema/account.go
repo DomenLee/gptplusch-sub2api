@@ -91,6 +91,13 @@ func (Account) Fields() []ent.Field {
 		field.Int64("proxy_id").
 			Optional().
 			Nillable(),
+		field.Int64("proxy_group_id").
+			Optional().
+			Nillable().
+			Comment("Proxy group binding; mutually exclusive with proxy_id."),
+		field.Int64("proxy_fallback_origin_id").
+			Optional().Nillable().
+			Comment("Original proxy id replaced by expiry-fallback; for manual revert. NULL = not in fallback."),
 
 		// concurrency: 账户最大并发请求数
 		// 用于限制同一时间对该账户发起的请求数量
@@ -193,6 +200,11 @@ func (Account) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			MaxLen(20),
+
+		field.Int64("parent_account_id").Optional().Nillable().
+			Comment("Parent account id for a linked spark shadow (NULL = normal)."),
+		field.Enum("quota_dimension").Values("global", "spark").Default("global").
+			Comment("'global' (default) or 'spark' (shadow reads codex_bengalfox)."),
 	}
 }
 
@@ -209,6 +221,18 @@ func (Account) Edges() []ent.Edge {
 		edge.To("proxy", Proxy.Type).
 			Field("proxy_id").
 			Unique(),
+		edge.To("proxy_group", ProxyGroup.Type).
+			Field("proxy_group_id").
+			Unique().
+			Annotations(entsql.OnDelete(entsql.Restrict)),
+		// children/parent: linked spark shadow relationship.
+		// parent_account_id is nullable, and the active one-shadow-per-parent rule
+		// is enforced by the partial unique index in migration 154a.
+		edge.To("children", Account.Type).
+			Annotations(entsql.OnDelete(entsql.Restrict)).
+			From("parent").
+			Field("parent_account_id").
+			Unique(),
 		// usage_logs: 该账户的使用日志
 		edge.To("usage_logs", UsageLog.Type),
 	}
@@ -222,6 +246,7 @@ func (Account) Indexes() []ent.Index {
 		index.Fields("type"),                // 按认证类型筛选
 		index.Fields("status"),              // 按状态筛选
 		index.Fields("proxy_id"),            // 按代理筛选
+		index.Fields("proxy_group_id"),      // 按代理组筛选
 		index.Fields("priority"),            // 按优先级排序
 		index.Fields("last_used_at"),        // 按最后使用时间排序
 		index.Fields("schedulable"),         // 筛选可调度账户
@@ -232,5 +257,6 @@ func (Account) Indexes() []ent.Index {
 		index.Fields("platform", "priority"),
 		index.Fields("priority", "status"),
 		index.Fields("deleted_at"), // 软删除查询优化
+		index.Fields("parent_account_id"),
 	}
 }

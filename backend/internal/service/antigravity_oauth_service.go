@@ -90,7 +90,7 @@ type AntigravityTokenInfo struct {
 	Email            string `json:"email,omitempty"`
 	ProjectID        string `json:"project_id,omitempty"`
 	ProjectIDMissing bool   `json:"-"`
-	PlanType         string `json:"-"`
+	PlanType         string `json:"plan_type,omitempty"`
 	PrivacyMode      string `json:"-"`
 }
 
@@ -278,6 +278,9 @@ func isNonRetryableAntigravityOAuthError(err error) bool {
 func (s *AntigravityOAuthService) RefreshAccountToken(ctx context.Context, account *Account) (*AntigravityTokenInfo, error) {
 	if account.Platform != PlatformAntigravity || account.Type != AccountTypeOAuth {
 		return nil, fmt.Errorf("非 Antigravity OAuth 账户")
+	}
+	if err := resolveDefaultProxyGroupAccount(ctx, account); err != nil {
+		return nil, err
 	}
 
 	refreshToken := account.GetCredential("refresh_token")

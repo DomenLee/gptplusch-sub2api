@@ -194,6 +194,9 @@ func (p *AntigravityTokenProvider) markTempUnschedulable(account *Account, refre
 	if p.accountRepo == nil || account == nil {
 		return
 	}
+	if account.IsTempUnschedulableDisabled() {
+		return
+	}
 	now := time.Now()
 	until := now.Add(tokenRefreshTempUnschedDuration)
 	reason := "token refresh failed on request path: " + refreshErr.Error()
@@ -231,9 +234,5 @@ func (p *AntigravityTokenProvider) markBackfillAttempted(accountID int64) {
 }
 
 func AntigravityTokenCacheKey(account *Account) string {
-	projectID := strings.TrimSpace(account.GetCredential("project_id"))
-	if projectID != "" {
-		return "ag:" + projectID
-	}
 	return "ag:account:" + strconv.FormatInt(account.ID, 10)
 }

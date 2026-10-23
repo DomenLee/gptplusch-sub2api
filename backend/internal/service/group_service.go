@@ -9,8 +9,10 @@ import (
 )
 
 var (
-	ErrGroupNotFound = infraerrors.NotFound("GROUP_NOT_FOUND", "group not found")
-	ErrGroupExists   = infraerrors.Conflict("GROUP_EXISTS", "group name already exists")
+	ErrGroupNotFound             = infraerrors.NotFound("GROUP_NOT_FOUND", "group not found")
+	ErrGroupExists               = infraerrors.Conflict("GROUP_EXISTS", "group name already exists")
+	ErrNoAvailableAutoRouteGroup = infraerrors.ServiceUnavailable("AUTO_ROUTE_GROUP_UNAVAILABLE", "no auto route target group is currently available")
+	ErrGroupNotEmpty             = infraerrors.Conflict("GROUP_NOT_EMPTY", "group contains accounts")
 )
 
 type GroupRepository interface {
@@ -35,6 +37,54 @@ type GroupRepository interface {
 	BindAccountsToGroup(ctx context.Context, groupID int64, accountIDs []int64) error
 	// UpdateSortOrders 批量更新分组排序
 	UpdateSortOrders(ctx context.Context, updates []GroupSortOrderUpdate) error
+}
+
+// GroupAutoRouteConfigRepository 是自动路由配置的可选扩展。
+// 保持在 GroupRepository 之外，避免扩大网关及测试替身的必实现接口。
+type GroupAutoRouteConfigRepository interface {
+	GetAutoRouteConfigs(ctx context.Context, groupIDs []int64) (map[int64]GroupAutoRouteConfig, error)
+}
+
+type GroupAutoRouteConfig struct {
+	Enabled  bool
+	GroupIDs []int64
+}
+
+// GroupAutoRouteAccountCapacity is the account projection needed to decide
+// whether an auto-route target still has a free runtime concurrency slot.
+type GroupAutoRouteAccountCapacity struct {
+	GroupID        int64
+	AccountID      int64
+	MaxConcurrency int
+}
+
+// GroupAutoRouteCapacityRepository is an optional repository extension used
+// only by OpenAI auto-route entries. Keeping it optional preserves lightweight
+// group repository test doubles and non-runtime callers.
+type GroupAutoRouteCapacityRepository interface {
+	ListAutoRouteAccountCapacities(ctx context.Context, groupIDs []int64) ([]GroupAutoRouteAccountCapacity, error)
+}
+
+type GroupDuplicateRepository interface {
+	// FindByDuplicateOperationID performs the read-only recovery lookup used
+	// after an ambiguous idempotency-store failure.
+	FindByDuplicateOperationID(ctx context.Context, operationID string) (*Group, error)
+	// CreateFromSource atomically persists the group, copies the source group's
+	// exact account priorities, and writes the scheduler outbox event.
+	CreateFromSource(ctx context.Context, group *Group, sourceGroupID int64) error
+}
+
+// AdminGroupRepository makes the group-duplication write capability an explicit
+// admin-service dependency without widening gateway-only group test doubles.
+type AdminGroupRepository interface {
+	GroupRepository
+	GroupDuplicateRepository
+	EmptyGroupDeleteRepository
+}
+
+// EmptyGroupDeleteRepository provides the guarded cascade used by simple mode.
+type EmptyGroupDeleteRepository interface {
+	DeleteCascadeIfEmpty(ctx context.Context, id int64) ([]int64, error)
 }
 
 // GroupSortOrderUpdate 分组排序更新
@@ -125,6 +175,15 @@ func (s *GroupService) GetByID(ctx context.Context, id int64) (*Group, error) {
 	if err != nil {
 		return nil, fmt.Errorf("get group: %w", err)
 	}
+	if autoRepo, ok := s.groupRepo.(GroupAutoRouteConfigRepository); ok {
+		configs, configErr := autoRepo.GetAutoRouteConfigs(ctx, []int64{id})
+		if configErr != nil {
+			return nil, fmt.Errorf("get group auto route config: %w", configErr)
+		}
+		config := configs[id]
+		group.AutoRouteEnabled = config.Enabled
+		group.AutoRouteGroupIDs = append([]int64(nil), config.GroupIDs...)
+	}
 	return group, nil
 }
 
@@ -148,7 +207,7 @@ func (s *GroupService) ListActive(ctx context.Context) ([]Group, error) {
 
 // Update 更新分组
 func (s *GroupService) Update(ctx context.Context, id int64, req UpdateGroupRequest) (*Group, error) {
-	group, err := s.groupRepo.GetByID(ctx, id)
+	group, err := s.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get group: %w", err)
 	}

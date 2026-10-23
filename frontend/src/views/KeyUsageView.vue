@@ -393,12 +393,16 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores'
 import BrandWordmark from '@/components/common/BrandWordmark.vue'
+import { FeatureFlags, resolveFeatureFlag } from '@/utils/featureFlags'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { resolveSiteName } from '@/constants/site'
+import { buildGatewayUrl } from '@/api/client'
+import { formatDateLocalInput } from '@/utils/format'
 
 const { t, locale } = useI18n()
 const appStore = useAppStore()
+const subscriptionFeatureEnabled = computed(() => resolveFeatureFlag(appStore.cachedPublicSettings, FeatureFlags.subscription))
 
 // ==================== Site Settings (same as HomeView) ====================
 
@@ -459,7 +463,6 @@ function setDateRange(key: DateRangeKey) {
 
 function getDateParams(): string {
   const now = new Date()
-  const fmt = (d: Date) => d.toISOString().split('T')[0]
   const params = new URLSearchParams()
 
   if (currentRange.value === 'custom') {
@@ -468,13 +471,13 @@ function getDateParams(): string {
       params.set('end_date', customEndDate.value)
     }
   } else {
-    const end = fmt(now)
+    const end = formatDateLocalInput(now)
     let start: string
     switch (currentRange.value) {
       case 'today': start = end; break
-      case '7d': start = fmt(new Date(now.getTime() - 7 * 86400000)); break
-      case '30d': start = fmt(new Date(now.getTime() - 30 * 86400000)); break
-      default: start = fmt(new Date(now.getTime() - 30 * 86400000))
+      case '7d': start = formatDateLocalInput(new Date(now.getTime() - 7 * 86400000)); break
+      case '30d': start = formatDateLocalInput(new Date(now.getTime() - 30 * 86400000)); break
+      default: start = formatDateLocalInput(new Date(now.getTime() - 30 * 86400000))
     }
     params.set('start_date', start)
     params.set('end_date', end)
@@ -697,7 +700,9 @@ const detailRows = computed<DetailRow[]>(() => {
   } else {
     rows.push({
       iconBg: 'bg-emerald-500/10', iconColor: 'text-emerald-500', iconSvg: ICON_CHECK,
-      label: t('keyUsage.subscriptionType'), value: data.planName || t('keyUsage.walletBalance'), valueClass: '',
+      // 订阅功能关闭后这一行只会是「钱包余额」，标签改用不带「订阅」字样的「计费方式」。
+      label: subscriptionFeatureEnabled.value ? t('keyUsage.subscriptionType') : t('keyUsage.billingType'),
+      value: data.planName || t('keyUsage.walletBalance'), valueClass: '',
     })
 
     if (data.subscription) {
@@ -827,7 +832,7 @@ function getBrowserTimezone(): string {
 
 async function fetchUsage(key: string) {
   const dateParams = getDateParams()
-  const url = '/v1/usage' + (dateParams ? '?' + dateParams : '')
+  const url = buildGatewayUrl('/v1/usage') + (dateParams ? '?' + dateParams : '')
   const res = await fetch(url, {
     headers: { 'Authorization': 'Bearer ' + key },
   })

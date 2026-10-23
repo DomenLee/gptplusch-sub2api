@@ -32,6 +32,29 @@
                 @change="loadCharts"
               />
             </div>
+            <router-link to="/store" class="dashboard-dark-pill">
+              <span>{{ t('dashboard.buyNow') }}</span>
+              <Icon name="arrowRight" size="sm" />
+            </router-link>
+            <button
+              v-if="checkInStatus?.config.enabled"
+              type="button"
+              class="dashboard-checkin-pill"
+              :disabled="checkingIn || checkInStatus.checked_today"
+              @click="handleCheckIn"
+            >
+              <LoadingSpinner v-if="checkingIn" size="sm" />
+              <Icon v-else :name="checkInStatus.checked_today ? 'checkCircle' : 'gift'" size="sm" />
+              <span>
+                {{
+                  checkingIn
+                    ? t('dashboard.checkingIn')
+                    : checkInStatus.checked_today
+                      ? t('dashboard.checkedIn')
+                      : t('dashboard.checkIn')
+                }}
+              </span>
+            </button>
             <button class="dashboard-dark-pill" :disabled="loadingCharts" @click="refreshAll">
               <span>{{ t('common.refresh') }}</span>
               <Icon name="refresh" size="sm" />
@@ -266,6 +289,12 @@
         </div>
       </template>
     </div>
+
+    <CheckInRewardDialog
+      :show="showCheckInReward"
+      :record="checkInReward"
+      @close="showCheckInReward = false"
+    />
   </AppLayout>
 </template>
 
@@ -274,8 +303,11 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
+import { useAppStore } from '@/stores'
 import { usageAPI, type UserDashboardStats as UserStatsType } from '@/api/usage'
+import checkInAPI, { type CheckInRecord, type CheckInStatus } from '@/api/checkin'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import CheckInRewardDialog from '@/components/user/CheckInRewardDialog.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import Select from '@/components/common/Select.vue'
@@ -287,6 +319,7 @@ type IconName = InstanceType<typeof Icon>['$props']['name']
 const router = useRouter()
 const { t } = useI18n()
 const authStore = useAuthStore()
+const appStore = useAppStore()
 const user = computed(() => authStore.user)
 const stats = ref<UserStatsType | null>(null)
 const loading = ref(false)
@@ -295,7 +328,10 @@ const loadingCharts = ref(false)
 const trendData = ref<TrendDataPoint[]>([])
 const modelStats = ref<ModelStat[]>([])
 const recentUsage = ref<UsageLog[]>([])
-
+const checkInStatus = ref<CheckInStatus | null>(null)
+const checkingIn = ref(false)
+const checkInReward = ref<CheckInRecord | null>(null)
+const showCheckInReward = ref(false)
 const formatLD = (d: Date) => d.toISOString().split('T')[0]
 const startDate = ref(formatLD(new Date(Date.now() - 6 * 86400000)))
 const endDate = ref(formatLD(new Date()))
@@ -394,9 +430,46 @@ const loadRecent = async () => {
   }
 }
 
+const loadCheckInStatus = async () => {
+  try {
+    checkInStatus.value = await checkInAPI.getStatus()
+  } catch (error) {
+    console.error('Failed to load check-in status:', error)
+    checkInStatus.value = null
+  }
+}
+
+const handleCheckIn = async () => {
+  if (!checkInStatus.value?.config.enabled || checkInStatus.value.checked_today || checkingIn.value) return
+
+  checkingIn.value = true
+  try {
+    const result = await checkInAPI.checkIn()
+    checkInStatus.value.checked_today = true
+    checkInStatus.value.today_reward = result.record.reward
+    if (result.already_checked) {
+      appStore.showWarning(t('dashboard.checkedIn'))
+    } else {
+      checkInReward.value = result.record
+      showCheckInReward.value = true
+    }
+    try {
+      const [status] = await Promise.all([checkInAPI.getStatus(), authStore.refreshUser()])
+      checkInStatus.value = status
+    } catch {
+      appStore.showError(t('checkIn.refreshFailed', { date: result.record.date }))
+    }
+  } catch (error: any) {
+    appStore.showError(error?.message || t('dashboard.checkInFailed'))
+  } finally {
+    checkingIn.value = false
+  }
+}
+
 const refreshAll = () => {
   loadStats()
   loadCharts()
+  loadCheckInStatus()
 }
 
 const formatBalance = (value: number) => new Intl.NumberFormat('en-US', {
@@ -483,6 +556,7 @@ onMounted(() => {
 
 .dashboard-pill,
 .dashboard-soft-pill,
+.dashboard-checkin-pill,
 .dashboard-dark-pill {
   display: inline-flex;
   min-height: 2.75rem;
@@ -492,6 +566,18 @@ onMounted(() => {
   border-radius: 9999px;
   font-size: 0.8125rem;
   font-weight: 700;
+}
+
+.dashboard-checkin-pill {
+  border: 1px solid #a3e635;
+  background: #bef264;
+  color: rgb(17 24 39);
+  padding: 0.5rem 1rem;
+}
+
+.dashboard-checkin-pill:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 
 .dashboard-pill,
@@ -515,10 +601,17 @@ onMounted(() => {
 }
 
 .dark .dashboard-pill,
-.dark .dashboard-soft-pill {
+.dark .dashboard-soft-pill,
+.dark .dashboard-checkin-pill {
   border-color: rgba(51, 65, 85, 0.9);
   background: rgba(30, 41, 59, 0.78);
   color: rgb(226 232 240);
+}
+
+.dark .dashboard-checkin-pill:not(:disabled) {
+  border-color: #bef264;
+  background: #bef264;
+  color: rgb(17 24 39);
 }
 
 .dark .dashboard-dark-pill {

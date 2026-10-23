@@ -13,6 +13,9 @@
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2">
               <p class="truncate font-medium text-gray-900 dark:text-white">{{ user.email }}</p>
+              <span v-if="user.deleted_at" class="flex-shrink-0 inline-flex items-center rounded px-1 py-px text-[10px] font-medium leading-tight bg-rose-100 text-rose-600 ring-1 ring-inset ring-rose-200 dark:bg-rose-500/20 dark:text-rose-400 dark:ring-rose-500/30">
+                {{ t('admin.usage.userDeletedBadge') }}
+              </span>
               <span
                 v-if="user.username"
                 class="flex-shrink-0 rounded bg-primary-50 px-1.5 py-0.5 text-xs text-primary-600 dark:bg-primary-900/20 dark:text-primary-400"
@@ -91,7 +94,7 @@
       <div v-else class="max-h-[28rem] space-y-3 overflow-y-auto">
         <div
           v-for="item in history"
-          :key="item.id"
+          :key="`${item.type}-${item.id}`"
           class="rounded-xl border border-gray-200 bg-white p-4 dark:border-dark-600 dark:bg-dark-800"
         >
           <div class="flex items-start justify-between">
@@ -134,6 +137,12 @@
                 {{ t('redeem.adminAdjustment') }}
               </p>
               <p
+                v-else-if="isCheckInType(item.type)"
+                class="text-xs text-gray-400 dark:text-dark-500"
+              >
+                {{ t('checkIn.title') }}
+              </p>
+              <p
                 v-else
                 class="font-mono text-xs text-gray-400 dark:text-dark-500"
               >
@@ -169,7 +178,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI, type BalanceHistoryItem } from '@/api/admin'
 import { formatDateTime } from '@/utils/format'
@@ -189,6 +198,9 @@ const total = ref(0)
 const totalRecharged = ref(0)
 const pageSize = 15
 const typeFilter = ref('')
+let requestVersion = 0
+
+onUnmounted(() => { requestVersion++ })
 
 const totalPages = computed(() => Math.ceil(total.value / pageSize) || 1)
 
@@ -197,6 +209,7 @@ const typeOptions = computed(() => [
   { value: '', label: t('admin.users.allTypes') },
   { value: 'balance', label: t('admin.users.typeBalance') },
   { value: 'affiliate_balance', label: t('admin.users.typeAffiliateBalance') },
+  { value: 'checkin_balance', label: t('admin.users.typeCheckInBalance') },
   { value: 'admin_balance', label: t('admin.users.typeAdminBalance') },
   { value: 'concurrency', label: t('admin.users.typeConcurrency') },
   { value: 'admin_concurrency', label: t('admin.users.typeAdminConcurrency') },
@@ -205,6 +218,7 @@ const typeOptions = computed(() => [
 
 // Watch modal open
 watch(() => props.show, (v) => {
+  requestVersion++
   if (v && props.user) {
     typeFilter.value = ''
     loadHistory(1)
@@ -213,6 +227,7 @@ watch(() => props.show, (v) => {
 
 const loadHistory = async (page: number) => {
   if (!props.user) return
+  const version = ++requestVersion
   loading.value = true
   currentPage.value = page
   try {
@@ -222,27 +237,32 @@ const loadHistory = async (page: number) => {
       pageSize,
       typeFilter.value || undefined
     )
+    if (version !== requestVersion) return
     history.value = res.items || []
     total.value = res.total || 0
     totalRecharged.value = res.total_recharged || 0
   } catch (error) {
+    if (version !== requestVersion) return
     console.error('Failed to load balance history:', error)
   } finally {
-    loading.value = false
+    if (version === requestVersion) loading.value = false
   }
 }
 
 // Helper: check if admin type
 const isAdminType = (type: string) => type === 'admin_balance' || type === 'admin_concurrency'
 
+const isCheckInType = (type: string) => type === 'checkin_balance'
+
 // Helper: check if balance type (includes admin_balance)
-const isBalanceType = (type: string) => type === 'balance' || type === 'admin_balance' || type === 'affiliate_balance'
+const isBalanceType = (type: string) => type === 'balance' || type === 'admin_balance' || type === 'affiliate_balance' || isCheckInType(type)
 
 // Helper: check if subscription type
 const isSubscriptionType = (type: string) => type === 'subscription'
 
 // Icon name based on type
 const getIconName = (item: BalanceHistoryItem) => {
+  if (isCheckInType(item.type)) return 'gift'
   if (isBalanceType(item.type)) return 'dollar'
   if (isSubscriptionType(item.type)) return 'badge'
   return 'bolt' // concurrency
@@ -250,6 +270,7 @@ const getIconName = (item: BalanceHistoryItem) => {
 
 // Icon background color
 const getIconBg = (item: BalanceHistoryItem) => {
+  if (isCheckInType(item.type)) return 'bg-sky-100 dark:bg-sky-900/30'
   if (isBalanceType(item.type)) {
     return item.value >= 0
       ? 'bg-emerald-100 dark:bg-emerald-900/30'
@@ -263,6 +284,7 @@ const getIconBg = (item: BalanceHistoryItem) => {
 
 // Icon text color
 const getIconColor = (item: BalanceHistoryItem) => {
+  if (isCheckInType(item.type)) return 'text-sky-600 dark:text-sky-400'
   if (isBalanceType(item.type)) {
     return item.value >= 0
       ? 'text-emerald-600 dark:text-emerald-400'
@@ -276,6 +298,7 @@ const getIconColor = (item: BalanceHistoryItem) => {
 
 // Value text color
 const getValueColor = (item: BalanceHistoryItem) => {
+  if (isCheckInType(item.type)) return 'text-sky-600 dark:text-sky-400'
   if (isBalanceType(item.type)) {
     return item.value >= 0
       ? 'text-emerald-600 dark:text-emerald-400'
@@ -294,6 +317,8 @@ const getItemTitle = (item: BalanceHistoryItem) => {
       return t('redeem.balanceAddedRedeem')
     case 'affiliate_balance':
       return t('redeem.balanceAddedAffiliate')
+    case 'checkin_balance':
+      return t('admin.users.checkInReward')
     case 'admin_balance':
       return item.value >= 0 ? t('redeem.balanceAddedAdmin') : t('redeem.balanceDeductedAdmin')
     case 'concurrency':

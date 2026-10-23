@@ -3,24 +3,51 @@ name: Build Docker Image
 on:
   push:
     branches:
-      - custom-ui
+      - main
   workflow_dispatch:
+
+concurrency:
+  group: sub2api-production
+  cancel-in-progress: false
 
 permissions:
   contents: read
-  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/domenlee/sub2api
 
 jobs:
+  prepare:
+    name: Validate production release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      date: ${{ steps.release.outputs.date }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate canonical version and main source
+        id: release
+        run: bash deploy/check-production-release.sh
+
+  ci:
+    name: Required CI
+    if: github.ref == 'refs/heads/main'
+    needs: prepare
+    uses: ./.github/workflows/backend-ci.yml
+    permissions:
+      contents: read
+
   build:
+    if: github.ref == 'refs/heads/main'
+    needs: [prepare, ci, security]
+    permissions:
+      contents: read
+      packages: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Set image name
-        run: |
-          OWNER="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
-          echo "IMAGE_NAME=ghcr.io/${OWNER}/sub2api" >> "$GITHUB_ENV"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -39,8 +66,82 @@ jobs:
           file: Dockerfile
           push: true
           platforms: linux/amd64
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ needs.prepare.outputs.date }}
+          labels: |
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.created=${{ needs.prepare.outputs.date }}
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  security:
+    name: Required security scan
+    if: github.ref == 'refs/heads/main'
+    needs: prepare
+    uses: ./.github/workflows/security-scan.yml
+    permissions:
+      contents: read
+
+  deploy:
+    name: Deploy to Vultr production
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VULTR_HOST: ${{ vars.VULTR_HOST }}
+      VULTR_PORT: ${{ vars.VULTR_PORT }}
+      VULTR_USER: ${{ vars.VULTR_USER }}
+    steps:
+      - name: Configure deployment SSH credentials
+        env:
+          DEPLOY_PRIVATE_KEY: ${{ secrets.VULTR_SSH_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.VULTR_SSH_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          for name in VULTR_HOST VULTR_PORT VULTR_USER DEPLOY_PRIVATE_KEY DEPLOY_KNOWN_HOSTS; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing ${name}; configure the Vultr repository variable or secret."
+              exit 1
+            fi
+          done
+          [[ "${VULTR_HOST}" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "${VULTR_PORT}" =~ ^[0-9]{1,5}$ ]]
+          (( 10#${VULTR_PORT} >= 1 && 10#${VULTR_PORT} <= 65535 ))
+          [[ "${VULTR_USER}" =~ ^[a-z_][a-z0-9_-]*$ ]]
+          mkdir -p "${RUNNER_TEMP}/sub2api-ssh"
+          printf '%s\n' "${DEPLOY_PRIVATE_KEY}" > "${RUNNER_TEMP}/sub2api-ssh/id_ed25519"
+          printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" > "${RUNNER_TEMP}/sub2api-ssh/known_hosts"
+
+      - name: Deploy immutable image through SSH
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "${TARGET_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          ssh -F /dev/null \
+            -i "${RUNNER_TEMP}/sub2api-ssh/id_ed25519" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=${RUNNER_TEMP}/sub2api-ssh/known_hosts" \
+            -o ConnectTimeout=30 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=6 \
+            -p "${VULTR_PORT}" \
+            "${VULTR_USER}@${VULTR_HOST}" "deploy ${TARGET_SHA}"
+
+      - name: Remove temporary SSH credentials
+        if: always()
+        run: |
+          rm -f "${RUNNER_TEMP}/sub2api-ssh/id_ed25519" "${RUNNER_TEMP}/sub2api-ssh/known_hosts"

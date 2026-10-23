@@ -40,10 +40,17 @@ type APIKey struct {
 	CompiledIPWhitelist *ip.CompiledIPRules `json:"-"`
 	CompiledIPBlacklist *ip.CompiledIPRules `json:"-"`
 	LastUsedAt          *time.Time
+	LastUsedIP          *string
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 	User                *User
 	Group               *Group
+	CurrentConcurrency  int
+
+	// autoRouteEntryGroup 仅用于单次请求的两阶段自动路由：鉴权阶段先按倍率
+	// 选择目标，用户真正取得并发槽位后再回到入口配置做模型与容量终选。
+	// 该字段不持久化，也不应暴露给 API 响应。
+	autoRouteEntryGroup *Group
 
 	// Quota fields
 	Quota     float64    // Quota limit in USD (0 = unlimited)
@@ -64,6 +71,11 @@ type APIKey struct {
 
 func (k *APIKey) IsActive() bool {
 	return k.Status == StatusActive
+}
+
+// IsAutoRouteRequest 报告当前 Key 是否由自动路由入口完成了倍率初选。
+func (k *APIKey) IsAutoRouteRequest() bool {
+	return k != nil && k.autoRouteEntryGroup != nil
 }
 
 // HasRateLimits returns true if any rate limit window is configured

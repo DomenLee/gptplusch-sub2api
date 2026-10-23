@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/account"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
+	"github.com/Wei-Shaw/sub2api/ent/proxygroup"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 )
 
@@ -121,6 +122,34 @@ func (_c *AccountCreate) SetProxyID(v int64) *AccountCreate {
 func (_c *AccountCreate) SetNillableProxyID(v *int64) *AccountCreate {
 	if v != nil {
 		_c.SetProxyID(*v)
+	}
+	return _c
+}
+
+// SetProxyGroupID sets the "proxy_group_id" field.
+func (_c *AccountCreate) SetProxyGroupID(v int64) *AccountCreate {
+	_c.mutation.SetProxyGroupID(v)
+	return _c
+}
+
+// SetNillableProxyGroupID sets the "proxy_group_id" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableProxyGroupID(v *int64) *AccountCreate {
+	if v != nil {
+		_c.SetProxyGroupID(*v)
+	}
+	return _c
+}
+
+// SetProxyFallbackOriginID sets the "proxy_fallback_origin_id" field.
+func (_c *AccountCreate) SetProxyFallbackOriginID(v int64) *AccountCreate {
+	_c.mutation.SetProxyFallbackOriginID(v)
+	return _c
+}
+
+// SetNillableProxyFallbackOriginID sets the "proxy_fallback_origin_id" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableProxyFallbackOriginID(v *int64) *AccountCreate {
+	if v != nil {
+		_c.SetProxyFallbackOriginID(*v)
 	}
 	return _c
 }
@@ -377,6 +406,34 @@ func (_c *AccountCreate) SetNillableSessionWindowStatus(v *string) *AccountCreat
 	return _c
 }
 
+// SetParentAccountID sets the "parent_account_id" field.
+func (_c *AccountCreate) SetParentAccountID(v int64) *AccountCreate {
+	_c.mutation.SetParentAccountID(v)
+	return _c
+}
+
+// SetNillableParentAccountID sets the "parent_account_id" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableParentAccountID(v *int64) *AccountCreate {
+	if v != nil {
+		_c.SetParentAccountID(*v)
+	}
+	return _c
+}
+
+// SetQuotaDimension sets the "quota_dimension" field.
+func (_c *AccountCreate) SetQuotaDimension(v account.QuotaDimension) *AccountCreate {
+	_c.mutation.SetQuotaDimension(v)
+	return _c
+}
+
+// SetNillableQuotaDimension sets the "quota_dimension" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableQuotaDimension(v *account.QuotaDimension) *AccountCreate {
+	if v != nil {
+		_c.SetQuotaDimension(*v)
+	}
+	return _c
+}
+
 // AddGroupIDs adds the "groups" edge to the Group entity by IDs.
 func (_c *AccountCreate) AddGroupIDs(ids ...int64) *AccountCreate {
 	_c.mutation.AddGroupIDs(ids...)
@@ -395,6 +452,45 @@ func (_c *AccountCreate) AddGroups(v ...*Group) *AccountCreate {
 // SetProxy sets the "proxy" edge to the Proxy entity.
 func (_c *AccountCreate) SetProxy(v *Proxy) *AccountCreate {
 	return _c.SetProxyID(v.ID)
+}
+
+// SetProxyGroup sets the "proxy_group" edge to the ProxyGroup entity.
+func (_c *AccountCreate) SetProxyGroup(v *ProxyGroup) *AccountCreate {
+	return _c.SetProxyGroupID(v.ID)
+}
+
+// SetParentID sets the "parent" edge to the Account entity by ID.
+func (_c *AccountCreate) SetParentID(id int64) *AccountCreate {
+	_c.mutation.SetParentID(id)
+	return _c
+}
+
+// SetNillableParentID sets the "parent" edge to the Account entity by ID if the given value is not nil.
+func (_c *AccountCreate) SetNillableParentID(id *int64) *AccountCreate {
+	if id != nil {
+		_c = _c.SetParentID(*id)
+	}
+	return _c
+}
+
+// SetParent sets the "parent" edge to the Account entity.
+func (_c *AccountCreate) SetParent(v *Account) *AccountCreate {
+	return _c.SetParentID(v.ID)
+}
+
+// AddChildIDs adds the "children" edge to the Account entity by IDs.
+func (_c *AccountCreate) AddChildIDs(ids ...int64) *AccountCreate {
+	_c.mutation.AddChildIDs(ids...)
+	return _c
+}
+
+// AddChildren adds the "children" edges to the Account entity.
+func (_c *AccountCreate) AddChildren(v ...*Account) *AccountCreate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddChildIDs(ids...)
 }
 
 // AddUsageLogIDs adds the "usage_logs" edge to the UsageLog entity by IDs.
@@ -501,6 +597,10 @@ func (_c *AccountCreate) defaults() error {
 		v := account.DefaultSchedulable
 		_c.mutation.SetSchedulable(v)
 	}
+	if _, ok := _c.mutation.QuotaDimension(); !ok {
+		v := account.DefaultQuotaDimension
+		_c.mutation.SetQuotaDimension(v)
+	}
 	return nil
 }
 
@@ -570,6 +670,14 @@ func (_c *AccountCreate) check() error {
 			return &ValidationError{Name: "session_window_status", err: fmt.Errorf(`ent: validator failed for field "Account.session_window_status": %w`, err)}
 		}
 	}
+	if _, ok := _c.mutation.QuotaDimension(); !ok {
+		return &ValidationError{Name: "quota_dimension", err: errors.New(`ent: missing required field "Account.quota_dimension"`)}
+	}
+	if v, ok := _c.mutation.QuotaDimension(); ok {
+		if err := account.QuotaDimensionValidator(v); err != nil {
+			return &ValidationError{Name: "quota_dimension", err: fmt.Errorf(`ent: validator failed for field "Account.quota_dimension": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -632,6 +740,10 @@ func (_c *AccountCreate) createSpec() (*Account, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Extra(); ok {
 		_spec.SetField(account.FieldExtra, field.TypeJSON, value)
 		_node.Extra = value
+	}
+	if value, ok := _c.mutation.ProxyFallbackOriginID(); ok {
+		_spec.SetField(account.FieldProxyFallbackOriginID, field.TypeInt64, value)
+		_node.ProxyFallbackOriginID = &value
 	}
 	if value, ok := _c.mutation.Concurrency(); ok {
 		_spec.SetField(account.FieldConcurrency, field.TypeInt, value)
@@ -705,6 +817,10 @@ func (_c *AccountCreate) createSpec() (*Account, *sqlgraph.CreateSpec) {
 		_spec.SetField(account.FieldSessionWindowStatus, field.TypeString, value)
 		_node.SessionWindowStatus = &value
 	}
+	if value, ok := _c.mutation.QuotaDimension(); ok {
+		_spec.SetField(account.FieldQuotaDimension, field.TypeEnum, value)
+		_node.QuotaDimension = value
+	}
 	if nodes := _c.mutation.GroupsIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.M2M,
@@ -740,6 +856,56 @@ func (_c *AccountCreate) createSpec() (*Account, *sqlgraph.CreateSpec) {
 			edge.Target.Nodes = append(edge.Target.Nodes, k)
 		}
 		_node.ProxyID = &nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.ProxyGroupIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: false,
+			Table:   account.ProxyGroupTable,
+			Columns: []string{account.ProxyGroupColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(proxygroup.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_node.ProxyGroupID = &nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.ParentIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   account.ParentTable,
+			Columns: []string{account.ParentColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(account.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_node.ParentAccountID = &nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.ChildrenIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   account.ChildrenTable,
+			Columns: []string{account.ChildrenColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(account.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
 		_spec.Edges = append(_spec.Edges, edge)
 	}
 	if nodes := _c.mutation.UsageLogsIDs(); len(nodes) > 0 {
@@ -933,6 +1099,48 @@ func (u *AccountUpsert) UpdateProxyID() *AccountUpsert {
 // ClearProxyID clears the value of the "proxy_id" field.
 func (u *AccountUpsert) ClearProxyID() *AccountUpsert {
 	u.SetNull(account.FieldProxyID)
+	return u
+}
+
+// SetProxyGroupID sets the "proxy_group_id" field.
+func (u *AccountUpsert) SetProxyGroupID(v int64) *AccountUpsert {
+	u.Set(account.FieldProxyGroupID, v)
+	return u
+}
+
+// UpdateProxyGroupID sets the "proxy_group_id" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateProxyGroupID() *AccountUpsert {
+	u.SetExcluded(account.FieldProxyGroupID)
+	return u
+}
+
+// ClearProxyGroupID clears the value of the "proxy_group_id" field.
+func (u *AccountUpsert) ClearProxyGroupID() *AccountUpsert {
+	u.SetNull(account.FieldProxyGroupID)
+	return u
+}
+
+// SetProxyFallbackOriginID sets the "proxy_fallback_origin_id" field.
+func (u *AccountUpsert) SetProxyFallbackOriginID(v int64) *AccountUpsert {
+	u.Set(account.FieldProxyFallbackOriginID, v)
+	return u
+}
+
+// UpdateProxyFallbackOriginID sets the "proxy_fallback_origin_id" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateProxyFallbackOriginID() *AccountUpsert {
+	u.SetExcluded(account.FieldProxyFallbackOriginID)
+	return u
+}
+
+// AddProxyFallbackOriginID adds v to the "proxy_fallback_origin_id" field.
+func (u *AccountUpsert) AddProxyFallbackOriginID(v int64) *AccountUpsert {
+	u.Add(account.FieldProxyFallbackOriginID, v)
+	return u
+}
+
+// ClearProxyFallbackOriginID clears the value of the "proxy_fallback_origin_id" field.
+func (u *AccountUpsert) ClearProxyFallbackOriginID() *AccountUpsert {
+	u.SetNull(account.FieldProxyFallbackOriginID)
 	return u
 }
 
@@ -1248,6 +1456,36 @@ func (u *AccountUpsert) ClearSessionWindowStatus() *AccountUpsert {
 	return u
 }
 
+// SetParentAccountID sets the "parent_account_id" field.
+func (u *AccountUpsert) SetParentAccountID(v int64) *AccountUpsert {
+	u.Set(account.FieldParentAccountID, v)
+	return u
+}
+
+// UpdateParentAccountID sets the "parent_account_id" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateParentAccountID() *AccountUpsert {
+	u.SetExcluded(account.FieldParentAccountID)
+	return u
+}
+
+// ClearParentAccountID clears the value of the "parent_account_id" field.
+func (u *AccountUpsert) ClearParentAccountID() *AccountUpsert {
+	u.SetNull(account.FieldParentAccountID)
+	return u
+}
+
+// SetQuotaDimension sets the "quota_dimension" field.
+func (u *AccountUpsert) SetQuotaDimension(v account.QuotaDimension) *AccountUpsert {
+	u.Set(account.FieldQuotaDimension, v)
+	return u
+}
+
+// UpdateQuotaDimension sets the "quota_dimension" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateQuotaDimension() *AccountUpsert {
+	u.SetExcluded(account.FieldQuotaDimension)
+	return u
+}
+
 // UpdateNewValues updates the mutable fields using the new values that were set on create.
 // Using this option is equivalent to using:
 //
@@ -1437,6 +1675,55 @@ func (u *AccountUpsertOne) UpdateProxyID() *AccountUpsertOne {
 func (u *AccountUpsertOne) ClearProxyID() *AccountUpsertOne {
 	return u.Update(func(s *AccountUpsert) {
 		s.ClearProxyID()
+	})
+}
+
+// SetProxyGroupID sets the "proxy_group_id" field.
+func (u *AccountUpsertOne) SetProxyGroupID(v int64) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetProxyGroupID(v)
+	})
+}
+
+// UpdateProxyGroupID sets the "proxy_group_id" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateProxyGroupID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateProxyGroupID()
+	})
+}
+
+// ClearProxyGroupID clears the value of the "proxy_group_id" field.
+func (u *AccountUpsertOne) ClearProxyGroupID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearProxyGroupID()
+	})
+}
+
+// SetProxyFallbackOriginID sets the "proxy_fallback_origin_id" field.
+func (u *AccountUpsertOne) SetProxyFallbackOriginID(v int64) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetProxyFallbackOriginID(v)
+	})
+}
+
+// AddProxyFallbackOriginID adds v to the "proxy_fallback_origin_id" field.
+func (u *AccountUpsertOne) AddProxyFallbackOriginID(v int64) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddProxyFallbackOriginID(v)
+	})
+}
+
+// UpdateProxyFallbackOriginID sets the "proxy_fallback_origin_id" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateProxyFallbackOriginID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateProxyFallbackOriginID()
+	})
+}
+
+// ClearProxyFallbackOriginID clears the value of the "proxy_fallback_origin_id" field.
+func (u *AccountUpsertOne) ClearProxyFallbackOriginID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearProxyFallbackOriginID()
 	})
 }
 
@@ -1804,6 +2091,41 @@ func (u *AccountUpsertOne) ClearSessionWindowStatus() *AccountUpsertOne {
 	})
 }
 
+// SetParentAccountID sets the "parent_account_id" field.
+func (u *AccountUpsertOne) SetParentAccountID(v int64) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetParentAccountID(v)
+	})
+}
+
+// UpdateParentAccountID sets the "parent_account_id" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateParentAccountID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateParentAccountID()
+	})
+}
+
+// ClearParentAccountID clears the value of the "parent_account_id" field.
+func (u *AccountUpsertOne) ClearParentAccountID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearParentAccountID()
+	})
+}
+
+// SetQuotaDimension sets the "quota_dimension" field.
+func (u *AccountUpsertOne) SetQuotaDimension(v account.QuotaDimension) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetQuotaDimension(v)
+	})
+}
+
+// UpdateQuotaDimension sets the "quota_dimension" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateQuotaDimension() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateQuotaDimension()
+	})
+}
+
 // Exec executes the query.
 func (u *AccountUpsertOne) Exec(ctx context.Context) error {
 	if len(u.create.conflict) == 0 {
@@ -2159,6 +2481,55 @@ func (u *AccountUpsertBulk) UpdateProxyID() *AccountUpsertBulk {
 func (u *AccountUpsertBulk) ClearProxyID() *AccountUpsertBulk {
 	return u.Update(func(s *AccountUpsert) {
 		s.ClearProxyID()
+	})
+}
+
+// SetProxyGroupID sets the "proxy_group_id" field.
+func (u *AccountUpsertBulk) SetProxyGroupID(v int64) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetProxyGroupID(v)
+	})
+}
+
+// UpdateProxyGroupID sets the "proxy_group_id" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateProxyGroupID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateProxyGroupID()
+	})
+}
+
+// ClearProxyGroupID clears the value of the "proxy_group_id" field.
+func (u *AccountUpsertBulk) ClearProxyGroupID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearProxyGroupID()
+	})
+}
+
+// SetProxyFallbackOriginID sets the "proxy_fallback_origin_id" field.
+func (u *AccountUpsertBulk) SetProxyFallbackOriginID(v int64) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetProxyFallbackOriginID(v)
+	})
+}
+
+// AddProxyFallbackOriginID adds v to the "proxy_fallback_origin_id" field.
+func (u *AccountUpsertBulk) AddProxyFallbackOriginID(v int64) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddProxyFallbackOriginID(v)
+	})
+}
+
+// UpdateProxyFallbackOriginID sets the "proxy_fallback_origin_id" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateProxyFallbackOriginID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateProxyFallbackOriginID()
+	})
+}
+
+// ClearProxyFallbackOriginID clears the value of the "proxy_fallback_origin_id" field.
+func (u *AccountUpsertBulk) ClearProxyFallbackOriginID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearProxyFallbackOriginID()
 	})
 }
 
@@ -2523,6 +2894,41 @@ func (u *AccountUpsertBulk) UpdateSessionWindowStatus() *AccountUpsertBulk {
 func (u *AccountUpsertBulk) ClearSessionWindowStatus() *AccountUpsertBulk {
 	return u.Update(func(s *AccountUpsert) {
 		s.ClearSessionWindowStatus()
+	})
+}
+
+// SetParentAccountID sets the "parent_account_id" field.
+func (u *AccountUpsertBulk) SetParentAccountID(v int64) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetParentAccountID(v)
+	})
+}
+
+// UpdateParentAccountID sets the "parent_account_id" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateParentAccountID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateParentAccountID()
+	})
+}
+
+// ClearParentAccountID clears the value of the "parent_account_id" field.
+func (u *AccountUpsertBulk) ClearParentAccountID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearParentAccountID()
+	})
+}
+
+// SetQuotaDimension sets the "quota_dimension" field.
+func (u *AccountUpsertBulk) SetQuotaDimension(v account.QuotaDimension) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetQuotaDimension(v)
+	})
+}
+
+// UpdateQuotaDimension sets the "quota_dimension" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateQuotaDimension() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateQuotaDimension()
 	})
 }
 

@@ -4,7 +4,7 @@
  * - Dashboard overview (raw path)
  */
 
-import { apiClient } from '../client'
+import { apiClient, buildGatewayUrl } from '../client'
 import type { PaginatedResponse } from '@/types'
 
 export type OpsQueryMode = 'auto' | 'raw' | 'preagg'
@@ -63,6 +63,14 @@ export interface OpsDashboardOverview {
     avg: number
   }
 
+  output_tps?: {
+    p5: number | null
+    p10: number | null
+    p50: number | null
+    avg: number | null
+    sample_count: number
+  } | null
+
   duration: OpsPercentiles
   ttft: OpsPercentiles
 }
@@ -107,7 +115,7 @@ export interface OpsThroughputTrendResponse {
 
 export type OpsRequestKind = 'success' | 'error'
 export type OpsRequestDetailsKind = OpsRequestKind | 'all'
-export type OpsRequestDetailsSort = 'created_at_desc' | 'duration_desc'
+export type OpsRequestDetailsSort = 'created_at_desc' | 'duration_desc' | 'ttft_desc'
 
 export interface OpsRequestDetail {
   kind: OpsRequestKind
@@ -117,6 +125,7 @@ export interface OpsRequestDetail {
   platform?: string
   model?: string
   duration_ms?: number | null
+  first_token_ms?: number | null
   status_code?: number | null
 
   error_id?: number | null
@@ -593,9 +602,10 @@ export function subscribeQPS(onMessage: (data: any) => void, options: SubscribeQ
 
     isConnecting = true
     setStatus(hasConnectedOnce ? 'reconnecting' : 'connecting')
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsBaseUrl = options.wsBaseUrl || import.meta.env.VITE_WS_BASE_URL || window.location.host
-    const wsURL = new URL(`${protocol}//${wsBaseUrl}/api/v1/admin/ops/ws/qps`)
+    const wsBaseUrl = options.wsBaseUrl || import.meta.env.VITE_WS_BASE_URL
+    const wsURL = wsBaseUrl
+      ? new URL(`${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${wsBaseUrl}/api/v1/admin/ops/ws/qps`)
+      : new URL(buildGatewayUrl('/api/v1/admin/ops/ws/qps').replace(/^http/, 'ws'))
 
     // Do NOT put admin JWT in the URL query string (it can leak via access logs, proxies, etc).
     // Browsers cannot set Authorization headers for WebSockets, so we pass the token via
@@ -685,6 +695,7 @@ export type MetricType =
   | 'account_rate_limited_count'
   | 'account_error_count'
   | 'account_error_ratio'
+  | 'account_temp_unscheduled_count'
   | 'overload_account_count'
 export type Operator = '>' | '>=' | '<' | '<=' | '==' | '!='
 
@@ -778,9 +789,15 @@ export interface OpsAlertRuntimeSettings {
   thresholds: OpsMetricThresholds // 指标阈值配置
 }
 
+export interface OpsOpenAIAccountQuotaAutoPauseSettings {
+  default_threshold_5h: number // 0~1，0 表示不启用全局默认 5h 阈值
+  default_threshold_7d: number // 0~1，0 表示不启用全局默认 7d 阈值
+}
+
 export interface OpsAdvancedSettings {
   data_retention: OpsDataRetentionSettings
   aggregation: OpsAggregationSettings
+  openai_account_quota_auto_pause: OpsOpenAIAccountQuotaAutoPauseSettings
   ignore_count_tokens_errors: boolean
   ignore_context_canceled: boolean
   ignore_no_available_accounts: boolean
@@ -806,12 +823,14 @@ export interface OpsAggregationSettings {
 
 export interface OpsRuntimeLogConfig {
   level: 'debug' | 'info' | 'warn' | 'error'
+  persist_access_logs: boolean
   enable_sampling: boolean
   sampling_initial: number
   sampling_thereafter: number
   caller: boolean
   stacktrace_level: 'none' | 'error' | 'fatal'
   retention_days: number
+  request_retention_days: number
   source?: string
   updated_at?: string
   updated_by_user_id?: number
@@ -820,12 +839,14 @@ export interface OpsRuntimeLogConfig {
 export interface OpsSystemLog {
   id: number
   created_at: string
+  host: string
   level: string
   component: string
   message: string
   request_id?: string
   client_request_id?: string
   user_id?: number | null
+  api_key_id?: number | null
   account_id?: number | null
   platform?: string
   model?: string
@@ -840,11 +861,13 @@ export interface OpsSystemLogQuery {
   time_range?: '5m' | '30m' | '1h' | '6h' | '24h' | '7d' | '30d'
   start_time?: string
   end_time?: string
+  host?: string
   level?: string
   component?: string
   request_id?: string
   client_request_id?: string
   user_id?: number | null
+  api_key_id?: number | null
   account_id?: number | null
   platform?: string
   model?: string
@@ -854,11 +877,13 @@ export interface OpsSystemLogQuery {
 export interface OpsSystemLogCleanupRequest {
   start_time?: string
   end_time?: string
+  host?: string
   level?: string
   component?: string
   request_id?: string
   client_request_id?: string
   user_id?: number | null
+  api_key_id?: number | null
   account_id?: number | null
   platform?: string
   model?: string
@@ -901,6 +926,9 @@ export interface OpsErrorLog {
   user_id?: number | null
   user_email: string
   api_key_id?: number | null
+  // 关联 api_key 名称（后端 LEFT JOIN api_keys；软删保留 name，故已删 key 仍有原名）。
+  api_key_name?: string
+  api_key_deleted?: boolean
   account_id?: number | null
   account_name: string
   group_id?: number | null
@@ -916,11 +944,12 @@ export interface OpsErrorLog {
   requested_model?: string
   upstream_model?: string
   request_type?: number | null
+  user_agent?: string
+
 }
 
 export interface OpsErrorDetail extends OpsErrorLog {
   error_body: string
-  user_agent: string
 
   // Upstream context (optional; enriched by gateway services)
   upstream_status_code?: number | null
@@ -935,6 +964,9 @@ export interface OpsErrorDetail extends OpsErrorLog {
   time_to_first_token_ms?: number | null
 
   is_business_limited: boolean
+
+  // Bound (non-deleted) key prefix, snapshotted at error time
+  api_key_prefix?: string | null
 }
 
 export type OpsErrorLogsResponse = PaginatedResponse<OpsErrorLog>
@@ -1069,8 +1101,14 @@ export type OpsErrorListQueryParams = {
   platform?: string
   group_id?: number | null
   account_id?: number | null
+  user_id?: number
+  api_key_id?: number
+  // 模型过滤：后端以 COALESCE(requested_model, model) 精确匹配（admin 路径）。
+  model?: string
 
   phase?: string
+  // 分类(用户侧粗分类码,如 auth/rate_limit/upstream),后端反查为 phase/type ANY 条件
+  category?: string
   error_owner?: string
   error_source?: string
   resolved?: string
@@ -1079,6 +1117,10 @@ export type OpsErrorListQueryParams = {
   q?: string
   status_codes?: string
   status_codes_other?: string
+
+  // 服务端排序,列白名单见后端 opsErrorLogsOrderBy(created_at/model/status_code)
+  sort_by?: string
+  sort_order?: 'asc' | 'desc'
 }
 
 // Legacy unified endpoints

@@ -92,16 +92,19 @@ onUnmounted(() => {
 }
 
 /* 移动端：恢复正常滚动 */
+.table-page-layout.mobile-mode {
+  /* 移动端表格会切换为卡片列表；若仍固定在桌面端的视口高度，超出的
+     列表会被 AppLayout 的 console-surface 裁剪，导致无法继续向下滑动。 */
+  height: auto;
+  min-height: calc(100vh - 64px - 4rem);
+}
+
 .table-page-layout.mobile-mode .table-scroll-container {
   @apply h-auto overflow-visible border-none shadow-none bg-transparent;
 }
 
 .table-page-layout.mobile-mode .layout-section-scrollable {
   @apply flex-none min-h-fit;
-}
-
-.table-page-layout.mobile-mode .table-scroll-container :deep(.table-wrapper) {
-  @apply overflow-visible;
 }
 
 .table-page-layout.mobile-mode .table-scroll-container :deep(table) {

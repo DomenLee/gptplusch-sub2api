@@ -93,6 +93,42 @@ func (f AuthIdentityChannelFunc) Mutate(ctx context.Context, m ent.Mutation) (en
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.AuthIdentityChannelMutation", m)
 }
 
+// The BatchImageEventFunc type is an adapter to allow the use of ordinary
+// function as BatchImageEvent mutator.
+type BatchImageEventFunc func(context.Context, *ent.BatchImageEventMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f BatchImageEventFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.BatchImageEventMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.BatchImageEventMutation", m)
+}
+
+// The BatchImageItemFunc type is an adapter to allow the use of ordinary
+// function as BatchImageItem mutator.
+type BatchImageItemFunc func(context.Context, *ent.BatchImageItemMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f BatchImageItemFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.BatchImageItemMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.BatchImageItemMutation", m)
+}
+
+// The BatchImageJobFunc type is an adapter to allow the use of ordinary
+// function as BatchImageJob mutator.
+type BatchImageJobFunc func(context.Context, *ent.BatchImageJobMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f BatchImageJobFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.BatchImageJobMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.BatchImageJobMutation", m)
+}
+
 // The ChannelMonitorFunc type is an adapter to allow the use of ordinary
 // function as ChannelMonitor mutator.
 type ChannelMonitorFunc func(context.Context, *ent.ChannelMonitorMutation) (ent.Value, error)
@@ -139,6 +175,18 @@ func (f ChannelMonitorRequestTemplateFunc) Mutate(ctx context.Context, m ent.Mut
 		return f(ctx, mv)
 	}
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ChannelMonitorRequestTemplateMutation", m)
+}
+
+// The CompositeModelRouteFunc type is an adapter to allow the use of ordinary
+// function as CompositeModelRoute mutator.
+type CompositeModelRouteFunc func(context.Context, *ent.CompositeModelRouteMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f CompositeModelRouteFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.CompositeModelRouteMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.CompositeModelRouteMutation", m)
 }
 
 // The ErrorPassthroughRuleFunc type is an adapter to allow the use of ordinary
@@ -273,6 +321,18 @@ func (f ProxyFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ProxyMutation", m)
 }
 
+// The ProxyGroupFunc type is an adapter to allow the use of ordinary
+// function as ProxyGroup mutator.
+type ProxyGroupFunc func(context.Context, *ent.ProxyGroupMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ProxyGroupFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ProxyGroupMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ProxyGroupMutation", m)
+}
+
 // The RedeemCodeFunc type is an adapter to allow the use of ordinary
 // function as RedeemCode mutator.
 type RedeemCodeFunc func(context.Context, *ent.RedeemCodeMutation) (ent.Value, error)
@@ -403,6 +463,18 @@ func (f UserAttributeValueFunc) Mutate(ctx context.Context, m ent.Mutation) (ent
 		return f(ctx, mv)
 	}
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.UserAttributeValueMutation", m)
+}
+
+// The UserPlatformQuotaFunc type is an adapter to allow the use of ordinary
+// function as UserPlatformQuota mutator.
+type UserPlatformQuotaFunc func(context.Context, *ent.UserPlatformQuotaMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f UserPlatformQuotaFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.UserPlatformQuotaMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.UserPlatformQuotaMutation", m)
 }
 
 // The UserSubscriptionFunc type is an adapter to allow the use of ordinary

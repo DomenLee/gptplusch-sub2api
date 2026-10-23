@@ -5,14 +5,19 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"html"
+	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/dgraph-io/ristretto"
@@ -20,13 +25,16 @@ import (
 )
 
 var (
-	ErrAPIKeyNotFound     = infraerrors.NotFound("API_KEY_NOT_FOUND", "api key not found")
-	ErrGroupNotAllowed    = infraerrors.Forbidden("GROUP_NOT_ALLOWED", "user is not allowed to bind this group")
-	ErrAPIKeyExists       = infraerrors.Conflict("API_KEY_EXISTS", "api key already exists")
-	ErrAPIKeyTooShort     = infraerrors.BadRequest("API_KEY_TOO_SHORT", "api key must be at least 16 characters")
-	ErrAPIKeyInvalidChars = infraerrors.BadRequest("API_KEY_INVALID_CHARS", "api key can only contain letters, numbers, underscores, and hyphens")
-	ErrAPIKeyRateLimited  = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
-	ErrInvalidIPPattern   = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
+	ErrAPIKeyNotFound       = infraerrors.NotFound("API_KEY_NOT_FOUND", "api key not found")
+	ErrGroupNotAllowed      = infraerrors.Forbidden("GROUP_NOT_ALLOWED", "user is not allowed to bind this group")
+	ErrAPIKeyExists         = infraerrors.Conflict("API_KEY_EXISTS", "api key already exists")
+	ErrAPIKeyTooShort       = infraerrors.BadRequest("API_KEY_TOO_SHORT", "api key must be at least 16 characters")
+	ErrAPIKeyInvalidChars   = infraerrors.BadRequest("API_KEY_INVALID_CHARS", "api key can only contain letters, numbers, underscores, and hyphens")
+	ErrAPIKeyRateLimited    = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
+	ErrAPIKeyCreateLimited  = infraerrors.TooManyRequests("API_KEY_CREATE_RATE_LIMITED", "too many api keys created recently, please try again later")
+	ErrAPIKeyCountExceeded  = infraerrors.Forbidden("API_KEY_COUNT_EXCEEDED", "api key count limit reached, please delete unused keys first")
+	ErrAPIKeyAuthOverloaded = infraerrors.ServiceUnavailable("API_KEY_AUTH_OVERLOADED", "api key authentication is temporarily overloaded")
+	ErrInvalidIPPattern     = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
 	// ErrAPIKeyExpired        = infraerrors.Forbidden("API_KEY_EXPIRED", "api key has expired")
 	ErrAPIKeyExpired = infraerrors.Forbidden("API_KEY_EXPIRED", "api key 已过期")
 	// ErrAPIKeyQuotaExhausted = infraerrors.TooManyRequests("API_KEY_QUOTA_EXHAUSTED", "api key quota exhausted")
@@ -39,11 +47,44 @@ var (
 )
 
 const (
-	apiKeyMaxErrorsPerHour = 20
-	apiKeyLastUsedMinTouch = 30 * time.Second
+	MaxAPIKeyCredentialBytes     = 128
+	defaultAuthLookupConcurrency = 64
+	defaultNegativeAuthCacheSize = 16384
+	apiKeyMaxErrorsPerHour       = 20
+	apiKeyCreateCountWindow      = time.Hour
+	apiKeyLastUsedMinTouch       = 30 * time.Second
+	apiKeySortCurrentConcurrency = "current_concurrency"
 	// DB 写失败后的短退避，避免请求路径持续同步重试造成写风暴与高延迟。
 	apiKeyLastUsedFailBackoff = 5 * time.Second
 )
+
+// APIKeyUpdateFields 声明 APIKeyRepository.Update 允许写回的列。
+//
+// 与 UserUpdateFields 同理：api_keys 的用量列由计费热路径原子递增
+// （IncrementQuotaUsed / IncrementRateLimitUsage 的 quota_used、usage_5h/1d/7d），
+// 若编辑 Key 时无条件整行回写，并发累计的配额与限流计数就会被旧快照覆盖。
+// 因此调用方必须显式声明要改的列。
+type APIKeyUpdateFields struct {
+	Name      bool
+	Status    bool
+	Quota     bool
+	GroupID   bool
+	ExpiresAt bool
+	// QuotaUsed 仅供"重置配额用量"路径声明；常规计费走 IncrementQuotaUsed。
+	QuotaUsed bool
+	// RateLimits 覆盖 rate_limit_5h / _1d / _7d 三个阈值。
+	RateLimits bool
+	// RateLimitUsage 覆盖 usage_5h/_1d/_7d 与三个窗口起点，
+	// 仅供"重置限流用量"路径声明；常规计费走 IncrementRateLimitUsage。
+	RateLimitUsage bool
+	// IPRules 覆盖 ip_whitelist 与 ip_blacklist。
+	IPRules bool
+}
+
+// IsEmpty 报告该次 Update 是否不写任何列。
+func (f APIKeyUpdateFields) IsEmpty() bool {
+	return f == APIKeyUpdateFields{}
+}
 
 type APIKeyRepository interface {
 	Create(ctx context.Context, key *APIKey) error
@@ -53,8 +94,13 @@ type APIKeyRepository interface {
 	GetByKey(ctx context.Context, key string) (*APIKey, error)
 	// GetByKeyForAuth 认证专用查询，返回最小字段集
 	GetByKeyForAuth(ctx context.Context, key string) (*APIKey, error)
-	Update(ctx context.Context, key *APIKey) error
+	// Update 只写 fields 中显式声明的列，其余列保持库中当前值。
+	Update(ctx context.Context, key *APIKey, fields APIKeyUpdateFields) error
 	Delete(ctx context.Context, id int64) error
+	// DeleteWithAudit keeps the legacy interface name for rolling-upgrade compatibility.
+	// Implementations must tombstone the key and soft-delete it atomically without
+	// retaining the deleted credential material.
+	DeleteWithAudit(ctx context.Context, id int64) error
 
 	ListByUserID(ctx context.Context, userID int64, params pagination.PaginationParams, filters APIKeyListFilters) ([]APIKey, *pagination.PaginationResult, error)
 	VerifyOwnership(ctx context.Context, userID int64, apiKeyIDs []int64) ([]int64, error)
@@ -79,8 +125,14 @@ type APIKeyRepository interface {
 	GetRateLimitData(ctx context.Context, id int64) (*APIKeyRateLimitData, error)
 }
 
+type apiKeyAllByUserIDLister interface {
+	ListAllByUserID(ctx context.Context, userID int64, filters APIKeyListFilters) ([]APIKey, error)
+}
+
 // APIKeyRateLimitData holds rate limit usage and window state for an API key.
 type APIKeyRateLimitData struct {
+	// QuotaUsed 是总额度已用量（quota_used）。
+	QuotaUsed     float64
 	Usage5h       float64
 	Usage1d       float64
 	Usage7d       float64
@@ -126,7 +178,7 @@ type APIKeyQuotaUsageState struct {
 type APIKeyCache interface {
 	GetCreateAttemptCount(ctx context.Context, userID int64) (int, error)
 	IncrementCreateAttemptCount(ctx context.Context, userID int64) error
-	DeleteCreateAttemptCount(ctx context.Context, userID int64) error
+	IncrementCreateCount(ctx context.Context, userID int64, window time.Duration) (int64, error)
 
 	IncrementDailyUsage(ctx context.Context, apiKey string) error
 	SetDailyUsageExpiry(ctx context.Context, apiKey string, ttl time.Duration) error
@@ -138,6 +190,20 @@ type APIKeyCache interface {
 	// Pub/Sub for L1 cache invalidation across instances
 	PublishAuthCacheInvalidation(ctx context.Context, cacheKey string) error
 	SubscribeAuthCacheInvalidation(ctx context.Context, handler func(cacheKey string)) error
+}
+
+type authCacheSubscriptionReadyKey struct{}
+
+func withAuthCacheSubscriptionReady(ctx context.Context, ready func()) context.Context {
+	return context.WithValue(ctx, authCacheSubscriptionReadyKey{}, ready)
+}
+
+// NotifyAuthCacheSubscriptionReady lets cache implementations report that the
+// server acknowledged the subscription without widening the public cache API.
+func NotifyAuthCacheSubscriptionReady(ctx context.Context) {
+	if ready, ok := ctx.Value(authCacheSubscriptionReadyKey{}).(func()); ok && ready != nil {
+		ready()
+	}
 }
 
 // APIKeyAuthCacheInvalidator 提供认证缓存失效能力
@@ -167,11 +233,11 @@ type CreateAPIKeyRequest struct {
 
 // UpdateAPIKeyRequest 更新API Key请求
 type UpdateAPIKeyRequest struct {
-	Name        *string  `json:"name"`
-	GroupID     *int64   `json:"group_id"`
-	Status      *string  `json:"status"`
-	IPWhitelist []string `json:"ip_whitelist"` // IP 白名单（空数组清空）
-	IPBlacklist []string `json:"ip_blacklist"` // IP 黑名单（空数组清空）
+	Name        *string   `json:"name"`
+	GroupID     *int64    `json:"group_id"`
+	Status      *string   `json:"status"`
+	IPWhitelist *[]string `json:"ip_whitelist"` // IP 白名单（nil 不修改，空数组清空）
+	IPBlacklist *[]string `json:"ip_blacklist"` // IP 黑名单（nil 不修改，空数组清空）
 
 	// Quota fields
 	Quota           *float64   `json:"quota"`       // Quota limit in USD (nil = no change, 0 = unlimited)
@@ -186,26 +252,93 @@ type UpdateAPIKeyRequest struct {
 	ResetRateLimitUsage *bool    `json:"reset_rate_limit_usage"` // Reset all usage counters to 0
 }
 
+func validateAPIKeyLimit(v float64) error {
+	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+		return infraerrors.BadRequest("API_KEY_LIMIT_INVALID", "API key limits must be finite and non-negative")
+	}
+	return nil
+}
+
+func validateCreateAPIKeyRequest(req CreateAPIKeyRequest) error {
+	for _, v := range []float64{req.Quota, req.RateLimit5h, req.RateLimit1d, req.RateLimit7d} {
+		if err := validateAPIKeyLimit(v); err != nil {
+			return err
+		}
+	}
+	if req.ExpiresInDays != nil && *req.ExpiresInDays <= 0 {
+		return infraerrors.BadRequest("API_KEY_EXPIRY_INVALID", "expires_in_days must be greater than zero")
+	}
+	return nil
+}
+
+func validateUpdateAPIKeyRequest(req UpdateAPIKeyRequest) error {
+	for _, v := range []*float64{req.Quota, req.RateLimit5h, req.RateLimit1d, req.RateLimit7d} {
+		if v != nil {
+			if err := validateAPIKeyLimit(*v); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // APIKeyService API Key服务
 // RateLimitCacheInvalidator invalidates rate limit cache entries on manual reset.
 type RateLimitCacheInvalidator interface {
 	InvalidateAPIKeyRateLimit(ctx context.Context, keyID int64) error
 }
 
+type autoRouteAccountRepository interface {
+	ListSchedulableByGroupIDAndPlatform(ctx context.Context, groupID int64, platform string) ([]Account, error)
+}
+
 type APIKeyService struct {
-	apiKeyRepo            APIKeyRepository
-	userRepo              UserRepository
-	groupRepo             GroupRepository
-	userSubRepo           UserSubscriptionRepository
-	userGroupRateRepo     UserGroupRateRepository
-	cache                 APIKeyCache
-	rateLimitCacheInvalid RateLimitCacheInvalidator // optional: invalidate Redis rate limit cache
-	cfg                   *config.Config
-	authCacheL1           *ristretto.Cache
-	authCfg               apiKeyAuthCacheConfig
-	authGroup             singleflight.Group
-	lastUsedTouchL1       sync.Map // keyID -> nextAllowedAt(time.Time)
-	lastUsedTouchSF       singleflight.Group
+	apiKeyRepo                APIKeyRepository
+	accountRepo               autoRouteAccountRepository
+	userRepo                  UserRepository
+	groupRepo                 GroupRepository
+	userSubRepo               UserSubscriptionRepository
+	userGroupRateRepo         UserGroupRateRepository
+	cache                     APIKeyCache
+	rateLimitCacheInvalid     RateLimitCacheInvalidator // optional: invalidate Redis rate limit cache
+	concurrencyService        *ConcurrencyService
+	cfg                       *config.Config
+	authCacheL1               *ristretto.Cache
+	authNegativeCacheL1       *ristretto.Cache
+	authCfg                   apiKeyAuthCacheConfig
+	authGroup                 singleflight.Group
+	authLookupSlots           chan struct{}
+	authLookupTotal           atomic.Uint64
+	authLookupRejected        atomic.Uint64
+	authLookupInFlight        atomic.Int64
+	invalidAuthAbuse          *invalidAuthAbuseLimiter
+	authInvalidationStart     sync.Once
+	authInvalidationStop      sync.Once
+	authInvalidationCancel    context.CancelFunc
+	authInvalidationWG        sync.WaitGroup
+	authInvalidationConnected atomic.Bool
+	authInvalidationFailures  atomic.Uint64
+	lastUsedTouchL1           sync.Map // keyID -> nextAllowedAt(time.Time)
+	lastUsedTouchSF           singleflight.Group
+}
+
+type APIKeyAuthLookupMetrics struct {
+	Total    uint64 `json:"total"`
+	Rejected uint64 `json:"rejected"`
+	InFlight int64  `json:"in_flight"`
+	Capacity int    `json:"capacity"`
+}
+
+func (s *APIKeyService) AuthLookupMetrics() APIKeyAuthLookupMetrics {
+	if s == nil {
+		return APIKeyAuthLookupMetrics{}
+	}
+	return APIKeyAuthLookupMetrics{
+		Total:    s.authLookupTotal.Load(),
+		Rejected: s.authLookupRejected.Load(),
+		InFlight: s.authLookupInFlight.Load(),
+		Capacity: cap(s.authLookupSlots),
+	}
 }
 
 // NewAPIKeyService 创建API Key服务实例
@@ -228,6 +361,12 @@ func NewAPIKeyService(
 		cfg:               cfg,
 	}
 	svc.initAuthCache(cfg)
+	lookupConcurrency := defaultAuthLookupConcurrency
+	if cfg != nil && cfg.APIKeyAuth.LookupConcurrency > 0 {
+		lookupConcurrency = cfg.APIKeyAuth.LookupConcurrency
+	}
+	svc.authLookupSlots = make(chan struct{}, lookupConcurrency)
+	svc.invalidAuthAbuse = newInvalidAuthAbuseLimiter(cfg)
 	return svc
 }
 
@@ -235,6 +374,16 @@ func NewAPIKeyService(
 // Called after construction (e.g. in wire) to avoid circular dependencies.
 func (s *APIKeyService) SetRateLimitCacheInvalidator(inv RateLimitCacheInvalidator) {
 	s.rateLimitCacheInvalid = inv
+}
+
+func (s *APIKeyService) SetConcurrencyService(concurrencyService *ConcurrencyService) {
+	s.concurrencyService = concurrencyService
+}
+
+// SetAccountRepository 注入自动路由模型/能力过滤所需的账号仓储。
+// 保留 setter 形式，避免扩大 APIKeyService 构造函数对现有测试的影响。
+func (s *APIKeyService) SetAccountRepository(accountRepo autoRouteAccountRepository) {
+	s.accountRepo = accountRepo
 }
 
 func (s *APIKeyService) compileAPIKeyIPRules(apiKey *APIKey) {
@@ -303,6 +452,34 @@ func (s *APIKeyService) checkAPIKeyRateLimit(ctx context.Context, userID int64) 
 	return nil
 }
 
+// checkAPIKeyCreateLimits 校验创建 API Key 的防滥用限制（对自定义与自动生成的 Key 一视同仁）。
+// 数量上限按未删除的 Key 计；创建次数按固定窗口累计，删除 Key 不返还次数，
+// 以阻断"删除后反复新建"的循环。Redis 出错时与自定义 Key 限流一致，不阻止用户操作。
+func (s *APIKeyService) checkAPIKeyCreateLimits(ctx context.Context, userID int64) error {
+	if s.cfg == nil {
+		return nil
+	}
+	if maxActive := s.cfg.APIKeyCreate.MaxActivePerUser; maxActive > 0 {
+		count, err := s.apiKeyRepo.CountByUserID(ctx, userID)
+		if err != nil {
+			return fmt.Errorf("count api keys: %w", err)
+		}
+		if count >= int64(maxActive) {
+			return ErrAPIKeyCountExceeded
+		}
+	}
+	if maxPerHour := s.cfg.APIKeyCreate.MaxPerUserPerHour; maxPerHour > 0 && s.cache != nil {
+		count, err := s.cache.IncrementCreateCount(ctx, userID, apiKeyCreateCountWindow)
+		if err != nil {
+			return nil
+		}
+		if count > int64(maxPerHour) {
+			return ErrAPIKeyCreateLimited
+		}
+	}
+	return nil
+}
+
 // incrementAPIKeyErrorCount 增加用户创建自定义Key的错误计数
 func (s *APIKeyService) incrementAPIKeyErrorCount(ctx context.Context, userID int64) {
 	if s.cache == nil {
@@ -327,6 +504,9 @@ func (s *APIKeyService) canUserBindGroup(ctx context.Context, user *User, group 
 
 // Create 创建API Key
 func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIKeyRequest) (*APIKey, error) {
+	if err := validateCreateAPIKeyRequest(req); err != nil {
+		return nil, err
+	}
 	// 验证用户存在
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
@@ -395,11 +575,15 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		}
 	}
 
+	if err := s.checkAPIKeyCreateLimits(ctx, userID); err != nil {
+		return nil, err
+	}
+
 	// 创建API Key记录
 	apiKey := &APIKey{
 		UserID:      userID,
 		Key:         key,
-		Name:        req.Name,
+		Name:        html.EscapeString(req.Name),
 		GroupID:     req.GroupID,
 		Status:      StatusActive,
 		IPWhitelist: req.IPWhitelist,
@@ -429,11 +613,115 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 
 // List 获取用户的API Key列表
 func (s *APIKeyService) List(ctx context.Context, userID int64, params pagination.PaginationParams, filters APIKeyListFilters) ([]APIKey, *pagination.PaginationResult, error) {
+	if normalizedAPIKeySortBy(params.SortBy) == apiKeySortCurrentConcurrency {
+		return s.listByCurrentConcurrency(ctx, userID, params, filters)
+	}
+
 	keys, pagination, err := s.apiKeyRepo.ListByUserID(ctx, userID, params, filters)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list api keys: %w", err)
 	}
+	s.fillCurrentConcurrency(ctx, keys)
 	return keys, pagination, nil
+}
+
+func (s *APIKeyService) listByCurrentConcurrency(ctx context.Context, userID int64, params pagination.PaginationParams, filters APIKeyListFilters) ([]APIKey, *pagination.PaginationResult, error) {
+	repo, ok := s.apiKeyRepo.(apiKeyAllByUserIDLister)
+	if !ok {
+		return nil, nil, fmt.Errorf("list api keys by current concurrency: repository does not support unpaginated API key listing")
+	}
+
+	keys, err := repo.ListAllByUserID(ctx, userID, filters)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list api keys: %w", err)
+	}
+	s.fillCurrentConcurrency(ctx, keys)
+	sortAPIKeysByCurrentConcurrency(keys, params.NormalizedSortOrder(pagination.SortOrderDesc))
+	return paginateAPIKeys(keys, params), apiKeyPaginationResult(int64(len(keys)), params), nil
+}
+
+func normalizedAPIKeySortBy(sortBy string) string {
+	return strings.ToLower(strings.TrimSpace(sortBy))
+}
+
+func sortAPIKeysByCurrentConcurrency(keys []APIKey, sortOrder string) {
+	desc := sortOrder != pagination.SortOrderAsc
+	sort.SliceStable(keys, func(i, j int) bool {
+		if keys[i].CurrentConcurrency == keys[j].CurrentConcurrency {
+			if desc {
+				return keys[i].ID > keys[j].ID
+			}
+			return keys[i].ID < keys[j].ID
+		}
+		if desc {
+			return keys[i].CurrentConcurrency > keys[j].CurrentConcurrency
+		}
+		return keys[i].CurrentConcurrency < keys[j].CurrentConcurrency
+	})
+}
+
+func paginateAPIKeys(keys []APIKey, params pagination.PaginationParams) []APIKey {
+	if len(keys) == 0 {
+		return []APIKey{}
+	}
+	limit := params.Limit()
+	page := params.Page
+	if page < 1 {
+		page = 1
+	}
+	offset := (page - 1) * limit
+	if offset >= len(keys) {
+		return []APIKey{}
+	}
+	end := offset + limit
+	if end > len(keys) {
+		end = len(keys)
+	}
+	return keys[offset:end]
+}
+
+func apiKeyPaginationResult(total int64, params pagination.PaginationParams) *pagination.PaginationResult {
+	limit := params.Limit()
+	pages := int(total) / limit
+	if int(total)%limit > 0 {
+		pages++
+	}
+	return &pagination.PaginationResult{
+		Total:    total,
+		Page:     params.Page,
+		PageSize: limit,
+		Pages:    pages,
+	}
+}
+
+func (s *APIKeyService) fillCurrentConcurrency(ctx context.Context, keys []APIKey) {
+	if s == nil || s.concurrencyService == nil || len(keys) == 0 {
+		return
+	}
+	ids := make([]int64, 0, len(keys))
+	for i := range keys {
+		if keys[i].ID > 0 {
+			ids = append(ids, keys[i].ID)
+		}
+	}
+	counts, err := s.concurrencyService.GetAPIKeyConcurrencyBatch(ctx, ids)
+	if err != nil {
+		return
+	}
+	for i := range keys {
+		keys[i].CurrentConcurrency = counts[keys[i].ID]
+	}
+}
+
+func (s *APIKeyService) currentConcurrencyForAPIKey(ctx context.Context, apiKeyID int64) int {
+	if s == nil || s.concurrencyService == nil || apiKeyID <= 0 {
+		return 0
+	}
+	counts, err := s.concurrencyService.GetAPIKeyConcurrencyBatch(ctx, []int64{apiKeyID})
+	if err != nil {
+		return 0
+	}
+	return counts[apiKeyID]
 }
 
 func (s *APIKeyService) VerifyOwnership(ctx context.Context, userID int64, apiKeyIDs []int64) ([]int64, error) {
@@ -455,11 +743,17 @@ func (s *APIKeyService) GetByID(ctx context.Context, id int64) (*APIKey, error) 
 		return nil, fmt.Errorf("get api key: %w", err)
 	}
 	s.compileAPIKeyIPRules(apiKey)
+	if apiKey != nil {
+		apiKey.CurrentConcurrency = s.currentConcurrencyForAPIKey(ctx, apiKey.ID)
+	}
 	return apiKey, nil
 }
 
 // GetByKey 根据Key字符串获取API Key（用于认证）
 func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, error) {
+	if len(key) == 0 || len(key) > MaxAPIKeyCredentialBytes {
+		return nil, ErrAPIKeyNotFound
+	}
 	cacheKey := s.authCacheKey(key)
 
 	if entry, ok := s.getAuthCacheEntry(ctx, cacheKey); ok {
@@ -501,7 +795,7 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 		}
 	}
 
-	apiKey, err := s.apiKeyRepo.GetByKeyForAuth(ctx, key)
+	apiKey, err := s.lookupAPIKeyForAuth(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("get api key: %w", err)
 	}
@@ -512,6 +806,9 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 
 // Update 更新API Key
 func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req UpdateAPIKeyRequest) (*APIKey, error) {
+	if err := validateUpdateAPIKeyRequest(req); err != nil {
+		return nil, err
+	}
 	apiKey, err := s.apiKeyRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get api key: %w", err)
@@ -523,22 +820,30 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	}
 
 	// 验证 IP 白名单格式
-	if len(req.IPWhitelist) > 0 {
-		if invalid := ip.ValidateIPPatterns(req.IPWhitelist); len(invalid) > 0 {
+	if req.IPWhitelist != nil && len(*req.IPWhitelist) > 0 {
+		if invalid := ip.ValidateIPPatterns(*req.IPWhitelist); len(invalid) > 0 {
 			return nil, fmt.Errorf("%w: %v", ErrInvalidIPPattern, invalid)
 		}
 	}
 
 	// 验证 IP 黑名单格式
-	if len(req.IPBlacklist) > 0 {
-		if invalid := ip.ValidateIPPatterns(req.IPBlacklist); len(invalid) > 0 {
+	if req.IPBlacklist != nil && len(*req.IPBlacklist) > 0 {
+		if invalid := ip.ValidateIPPatterns(*req.IPBlacklist); len(invalid) > 0 {
 			return nil, fmt.Errorf("%w: %v", ErrInvalidIPPattern, invalid)
 		}
 	}
 
+	// fields 只登记本次请求真正要改的列。quota_used 与 usage_5h/1d/7d 由计费热路径
+	// 原子递增，除非用户显式点了"重置"，否则这里不用快照把它们写回去。
+	var fields APIKeyUpdateFields
+	// 下面若干分支会顺带把 Status 改回 active（配额扩容、清除过期等），
+	// 所以用原始值比对来决定是否写 status，而不是只看 req.Status。
+	originalStatus := apiKey.Status
+
 	// 更新字段
 	if req.Name != nil {
-		apiKey.Name = *req.Name
+		apiKey.Name = html.EscapeString(*req.Name)
+		fields.Name = true
 	}
 
 	if req.GroupID != nil {
@@ -558,26 +863,26 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		}
 
 		apiKey.GroupID = req.GroupID
+		fields.GroupID = true
 	}
 
 	if req.Status != nil {
 		apiKey.Status = *req.Status
-		// 如果状态改变，清除Redis缓存
-		if s.cache != nil {
-			_ = s.cache.DeleteCreateAttemptCount(ctx, apiKey.UserID)
-		}
+		fields.Status = true
 	}
 
 	// Update quota fields
 	if req.Quota != nil {
 		apiKey.Quota = *req.Quota
-		// If quota is increased and status was quota_exhausted, reactivate
-		if apiKey.Status == StatusAPIKeyQuotaExhausted && *req.Quota > apiKey.QuotaUsed {
+		fields.Quota = true
+		// If quota now has room, or is changed to unlimited, reactivate exhausted keys.
+		if apiKey.Status == StatusAPIKeyQuotaExhausted && (*req.Quota <= 0 || *req.Quota > apiKey.QuotaUsed) {
 			apiKey.Status = StatusActive
 		}
 	}
 	if req.ResetQuota != nil && *req.ResetQuota {
 		apiKey.QuotaUsed = 0
+		fields.QuotaUsed = true
 		// If resetting quota and status was quota_exhausted, reactivate
 		if apiKey.Status == StatusAPIKeyQuotaExhausted {
 			apiKey.Status = StatusActive
@@ -585,31 +890,42 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	}
 	if req.ClearExpiration {
 		apiKey.ExpiresAt = nil
+		fields.ExpiresAt = true
 		// If clearing expiry and status was expired, reactivate
 		if apiKey.Status == StatusAPIKeyExpired {
 			apiKey.Status = StatusActive
 		}
 	} else if req.ExpiresAt != nil {
 		apiKey.ExpiresAt = req.ExpiresAt
+		fields.ExpiresAt = true
 		// If extending expiry and status was expired, reactivate
 		if apiKey.Status == StatusAPIKeyExpired && time.Now().Before(*req.ExpiresAt) {
 			apiKey.Status = StatusActive
 		}
 	}
 
-	// 更新 IP 限制（空数组会清空设置）
-	apiKey.IPWhitelist = req.IPWhitelist
-	apiKey.IPBlacklist = req.IPBlacklist
+	// 更新 IP 限制（nil 不修改，空数组清空设置）
+	if req.IPWhitelist != nil {
+		apiKey.IPWhitelist = *req.IPWhitelist
+		fields.IPRules = true
+	}
+	if req.IPBlacklist != nil {
+		apiKey.IPBlacklist = *req.IPBlacklist
+		fields.IPRules = true
+	}
 
 	// Update rate limit configuration
 	if req.RateLimit5h != nil {
 		apiKey.RateLimit5h = *req.RateLimit5h
+		fields.RateLimits = true
 	}
 	if req.RateLimit1d != nil {
 		apiKey.RateLimit1d = *req.RateLimit1d
+		fields.RateLimits = true
 	}
 	if req.RateLimit7d != nil {
 		apiKey.RateLimit7d = *req.RateLimit7d
+		fields.RateLimits = true
 	}
 	resetRateLimit := req.ResetRateLimitUsage != nil && *req.ResetRateLimitUsage
 	if resetRateLimit {
@@ -619,9 +935,15 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		apiKey.Window5hStart = nil
 		apiKey.Window1dStart = nil
 		apiKey.Window7dStart = nil
+		fields.RateLimitUsage = true
 	}
 
-	if err := s.apiKeyRepo.Update(ctx, apiKey); err != nil {
+	// 上面的自动复活分支可能改了 status，这里统一登记。
+	if apiKey.Status != originalStatus {
+		fields.Status = true
+	}
+
+	if err := s.apiKeyRepo.Update(ctx, apiKey, fields); err != nil {
 		return nil, fmt.Errorf("update api key: %w", err)
 	}
 
@@ -648,15 +970,14 @@ func (s *APIKeyService) Delete(ctx context.Context, id int64, userID int64) erro
 		return ErrInsufficientPerms
 	}
 
-	// 清除Redis缓存（使用 userID 而非 apiKey.UserID）
-	if s.cache != nil {
-		_ = s.cache.DeleteCreateAttemptCount(ctx, userID)
-	}
-	s.InvalidateAuthCacheByKey(ctx, key)
-
-	if err := s.apiKeyRepo.Delete(ctx, id); err != nil {
+	// 事务内:写审计 + 软删除(tombstone)。
+	if err := s.apiKeyRepo.DeleteWithAudit(ctx, id); err != nil {
 		return fmt.Errorf("delete api key: %w", err)
 	}
+
+	// 删除成功后再清理缓存,避免"缓存已清但删除失败"的竞态。
+	// 注意:不清零创建相关计数,否则"删除后反复新建"即可绕过创建限流。
+	s.InvalidateAuthCacheByKey(ctx, key)
 	s.lastUsedTouchL1.Delete(id)
 
 	return nil
@@ -793,6 +1114,30 @@ func (s *APIKeyService) SearchAPIKeys(ctx context.Context, userID int64, keyword
 	return keys, nil
 }
 
+// GetUserGroupVisibility 返回 user_allowed_groups 授权及有效订阅的分组 ID 集合，
+// 以及该用户是否开启了公开分组限制。开启时公开分组的可见性也要落在该集合内。
+//
+// 与 GetAvailableGroups 的区别：这里保留普通授权分组的「橱窗」语义，不检查
+// 分组是否活跃；有效订阅也授予对应分组的可见性。返回值恒非 nil。
+func (s *APIKeyService) GetUserGroupVisibility(ctx context.Context, userID int64) (map[int64]struct{}, bool, error) {
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, false, fmt.Errorf("get user: %w", err)
+	}
+	allowed := make(map[int64]struct{}, len(user.AllowedGroups))
+	for _, id := range user.AllowedGroups {
+		allowed[id] = struct{}{}
+	}
+	subscriptions, err := s.userSubRepo.ListActiveByUserID(ctx, userID)
+	if err != nil {
+		return nil, false, fmt.Errorf("list active subscriptions: %w", err)
+	}
+	for _, sub := range subscriptions {
+		allowed[sub.GroupID] = struct{}{}
+	}
+	return allowed, user.RestrictPublicGroups, nil
+}
+
 // GetUserGroupRates 获取用户的专属分组倍率配置
 // 返回 map[groupID]rateMultiplier
 func (s *APIKeyService) GetUserGroupRates(ctx context.Context, userID int64) (map[int64]float64, error) {
@@ -804,6 +1149,366 @@ func (s *APIKeyService) GetUserGroupRates(ctx context.Context, userID int64) (ma
 		return nil, fmt.Errorf("get user group rates: %w", err)
 	}
 	return rates, nil
+}
+
+type autoRouteGroupCapacity struct {
+	Max       int
+	Used      int
+	Unlimited bool
+}
+
+// AutoRouteRequirements 描述最终路由时当前请求对上游账号的最低要求。
+// 鉴权阶段不带这些条件，只做不占容量的倍率初选。
+type AutoRouteRequirements struct {
+	RequestedModel  string
+	Capability      OpenAIEndpointCapability
+	ImageCapability OpenAIImagesCapability
+	RequireCompact  bool
+}
+
+func (c autoRouteGroupCapacity) remaining() int {
+	if c.Unlimited {
+		return int(^uint(0) >> 1)
+	}
+	remaining := c.Max - c.Used
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+// ResolveAutoRouteGroup 把自动路由入口 Key 映射到当前有效倍率最低的可用 OpenAI 分组。
+// 非上游请求不参与容量竞争，保留原有方法签名供查询类端点使用。
+func (s *APIKeyService) ResolveAutoRouteGroup(ctx context.Context, apiKey *APIKey) (*APIKey, error) {
+	routed, _, err := s.resolveAutoRouteGroup(ctx, apiKey, false, AutoRouteRequirements{})
+	return routed, err
+}
+
+// ResolveAutoRouteGroupWithCapacity 在倍率排序后检查每个目标分组的实时剩余并发。
+// 返回的 reservation 必须注入请求上下文，并在请求结束时兜底释放。
+func (s *APIKeyService) ResolveAutoRouteGroupWithCapacity(ctx context.Context, apiKey *APIKey) (*APIKey, *AutoRouteCapacityReservation, error) {
+	return s.ResolveAutoRouteGroupWithCapacityForRequest(ctx, apiKey, AutoRouteRequirements{})
+}
+
+// ResolveAutoRouteGroupWithCapacityForRequest 在用户并发准入成功后，按模型、端点能力
+// 和实时账号容量完成终选。共享账号只归属于倍率排序最靠前的候选组，避免重复计容。
+func (s *APIKeyService) ResolveAutoRouteGroupWithCapacityForRequest(ctx context.Context, apiKey *APIKey, requirements AutoRouteRequirements) (*APIKey, *AutoRouteCapacityReservation, error) {
+	return s.resolveAutoRouteGroup(ctx, apiKey, true, requirements)
+}
+
+func (s *APIKeyService) resolveAutoRouteGroup(ctx context.Context, apiKey *APIKey, capacityEnabled bool, requirements AutoRouteRequirements) (*APIKey, *AutoRouteCapacityReservation, error) {
+	if apiKey == nil || apiKey.GroupID == nil || apiKey.Group == nil || s.groupRepo == nil {
+		return apiKey, nil, nil
+	}
+	entryAPIKey := apiKey
+	if apiKey.autoRouteEntryGroup != nil {
+		entry := *apiKey
+		entry.Group = apiKey.autoRouteEntryGroup
+		entry.GroupID = new(int64)
+		*entry.GroupID = apiKey.autoRouteEntryGroup.ID
+		entryAPIKey = &entry
+	}
+	autoRepo, ok := s.groupRepo.(GroupAutoRouteConfigRepository)
+	if !ok {
+		return apiKey, nil, nil
+	}
+	configs, err := autoRepo.GetAutoRouteConfigs(ctx, []int64{*entryAPIKey.GroupID})
+	if err != nil {
+		return nil, nil, fmt.Errorf("load auto route config: %w", err)
+	}
+	config := configs[*entryAPIKey.GroupID]
+	if !config.Enabled {
+		return apiKey, nil, nil
+	}
+	if entryAPIKey.Group.Platform != PlatformOpenAI || entryAPIKey.Group.SubscriptionType != SubscriptionTypeStandard {
+		return nil, nil, fmt.Errorf("invalid auto route entry group")
+	}
+
+	groups, err := s.groupRepo.ListActiveByPlatform(ctx, PlatformOpenAI)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list auto route target groups: %w", err)
+	}
+	allowed := make(map[int64]struct{}, len(config.GroupIDs))
+	for _, id := range config.GroupIDs {
+		allowed[id] = struct{}{}
+	}
+	rates, err := s.GetUserGroupRates(ctx, entryAPIKey.UserID)
+	if err != nil {
+		return nil, nil, err
+	}
+	candidates := rankAutoRouteTargets(groups, allowed, rates, entryAPIKey.Group.IsExclusive)
+	if len(candidates) == 0 {
+		return nil, nil, ErrNoAvailableAutoRouteGroup
+	}
+
+	var capacities map[int64]autoRouteGroupCapacity
+	capacityAware := false
+	if capacityEnabled {
+		capacities, capacityAware = s.loadAutoRouteGroupCapacitiesForRequest(ctx, candidates, requirements)
+	}
+	var target *Group
+	var reservation *AutoRouteCapacityReservation
+	for i := range candidates {
+		candidate := candidates[i]
+		if !capacityAware {
+			target = &candidate
+			break
+		}
+		capacity, ok := capacities[candidate.ID]
+		if !ok || capacity.remaining() <= 0 {
+			continue
+		}
+		if capacity.Unlimited || s.concurrencyService == nil {
+			target = &candidate
+			break
+		}
+		pending, acquired, acquireErr := s.concurrencyService.AcquireAutoRouteGroupSlot(ctx, candidate.ID, capacity.remaining())
+		if acquireErr != nil {
+			// Redis 容量保护失败时沿用现有 fail-open 策略，真实账号槽位仍会二次校验。
+			logger.LegacyPrintf("service.api_key", "Warning: acquire auto route capacity for group %d failed: %v", candidate.ID, acquireErr)
+			target = &candidate
+			break
+		}
+		if !acquired {
+			continue
+		}
+		target = &candidate
+		reservation = pending
+		break
+	}
+	if target == nil {
+		return nil, nil, ErrNoAvailableAutoRouteGroup
+	}
+
+	routed := *entryAPIKey
+	routed.GroupID = new(int64)
+	*routed.GroupID = target.ID
+	routed.Group = target
+	routed.autoRouteEntryGroup = entryAPIKey.Group
+	return &routed, reservation, nil
+}
+
+func selectAutoRouteTarget(groups []Group, allowed map[int64]struct{}, rates map[int64]float64, allowExclusive bool) *Group {
+	candidates := rankAutoRouteTargets(groups, allowed, rates, allowExclusive)
+	if len(candidates) == 0 {
+		return nil
+	}
+	target := candidates[0]
+	return &target
+}
+
+func rankAutoRouteTargets(groups []Group, allowed map[int64]struct{}, rates map[int64]float64, allowExclusive bool) []Group {
+	type candidate struct {
+		group Group
+		rate  float64
+	}
+	candidates := make([]candidate, 0, len(allowed))
+	for i := range groups {
+		group := groups[i]
+		if _, ok := allowed[group.ID]; !ok || group.ActiveAccountCount <= 0 || group.SubscriptionType != SubscriptionTypeStandard || (group.IsExclusive && !allowExclusive) {
+			continue
+		}
+		rate := group.RateMultiplier
+		if userRate, ok := rates[group.ID]; ok && !math.IsNaN(userRate) && !math.IsInf(userRate, 0) && userRate >= 0 {
+			rate = userRate
+		}
+		candidates = append(candidates, candidate{group: group, rate: rate})
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].rate != candidates[j].rate {
+			return candidates[i].rate < candidates[j].rate
+		}
+		if candidates[i].group.SortOrder != candidates[j].group.SortOrder {
+			return candidates[i].group.SortOrder < candidates[j].group.SortOrder
+		}
+		return candidates[i].group.ID < candidates[j].group.ID
+	})
+	result := make([]Group, 0, len(candidates))
+	for i := range candidates {
+		result = append(result, candidates[i].group)
+	}
+	return result
+}
+
+func (s *APIKeyService) loadAutoRouteGroupCapacities(ctx context.Context, groupIDs []int64) (map[int64]autoRouteGroupCapacity, bool) {
+	repo, ok := s.groupRepo.(GroupAutoRouteCapacityRepository)
+	if !ok || s.concurrencyService == nil {
+		return nil, false
+	}
+	rows, err := repo.ListAutoRouteAccountCapacities(ctx, groupIDs)
+	if err != nil {
+		logger.LegacyPrintf("service.api_key", "Warning: load auto route group capacities failed: %v", err)
+		return nil, false
+	}
+	capacities := make(map[int64]autoRouteGroupCapacity, len(groupIDs))
+	accountIDs := make([]int64, 0, len(rows))
+	capacityRows := make([]GroupAutoRouteAccountCapacity, 0, len(rows))
+	seenAccounts := make(map[int64]struct{}, len(rows))
+	seenGroupAccounts := make(map[[2]int64]struct{}, len(rows))
+	for _, row := range rows {
+		key := [2]int64{row.GroupID, row.AccountID}
+		if row.GroupID <= 0 || row.AccountID <= 0 {
+			continue
+		}
+		if _, exists := seenGroupAccounts[key]; exists {
+			continue
+		}
+		seenGroupAccounts[key] = struct{}{}
+		// 一个物理账号即使绑定多个目标分组，也只能贡献一次真实容量。
+		if _, exists := seenAccounts[row.AccountID]; exists {
+			continue
+		}
+		seenAccounts[row.AccountID] = struct{}{}
+		capacityRows = append(capacityRows, row)
+		capacity := capacities[row.GroupID]
+		if row.MaxConcurrency <= 0 {
+			capacity.Unlimited = true
+		} else {
+			capacity.Max += row.MaxConcurrency
+		}
+		capacities[row.GroupID] = capacity
+		accountIDs = append(accountIDs, row.AccountID)
+	}
+	loads, err := s.concurrencyService.GetAccountConcurrencyBatch(ctx, accountIDs)
+	if err != nil {
+		logger.LegacyPrintf("service.api_key", "Warning: load auto route account concurrency failed: %v", err)
+		return nil, false
+	}
+	for _, row := range capacityRows {
+		if row.MaxConcurrency <= 0 {
+			continue
+		}
+		capacity := capacities[row.GroupID]
+		used := loads[row.AccountID]
+		if used < 0 {
+			used = 0
+		}
+		if used > row.MaxConcurrency {
+			used = row.MaxConcurrency
+		}
+		capacity.Used += used
+		capacities[row.GroupID] = capacity
+	}
+	return capacities, true
+}
+
+func (s *APIKeyService) loadAutoRouteGroupCapacitiesForRequest(ctx context.Context, candidates []Group, requirements AutoRouteRequirements) (map[int64]autoRouteGroupCapacity, bool) {
+	if s.accountRepo == nil {
+		groupIDs := make([]int64, 0, len(candidates))
+		for i := range candidates {
+			groupIDs = append(groupIDs, candidates[i].ID)
+		}
+		return s.loadAutoRouteGroupCapacities(ctx, groupIDs)
+	}
+
+	type accountCapacity struct {
+		groupID int64
+		account *Account
+	}
+	rows := make([]accountCapacity, 0)
+	ownedAccounts := make(map[int64]struct{})
+	accountIDs := make([]int64, 0)
+	for i := range candidates {
+		candidate := candidates[i]
+		accounts, err := s.accountRepo.ListSchedulableByGroupIDAndPlatform(ctx, candidate.ID, PlatformOpenAI)
+		if err != nil {
+			logger.LegacyPrintf("service.api_key", "Warning: load model-aware auto route accounts for group %d failed: %v", candidate.ID, err)
+			// 单组读取失败时只跳过该组，不能退回到不校验模型的倍率初选。
+			continue
+		}
+		eligible := make([]*Account, 0, len(accounts))
+		candidateAccounts := make(map[int64]struct{}, len(accounts))
+		hasSharedAccount := false
+		for j := range accounts {
+			account := &accounts[j]
+			if account.ID <= 0 || !autoRouteAccountSupports(account, requirements) {
+				continue
+			}
+			if _, exists := candidateAccounts[account.ID]; exists {
+				continue
+			}
+			candidateAccounts[account.ID] = struct{}{}
+			eligible = append(eligible, account)
+			if _, exists := ownedAccounts[account.ID]; exists {
+				hasSharedAccount = true
+			}
+		}
+		if hasSharedAccount {
+			// 调度器仍可能在该组内选到共享账号。为避免容量终选认为有独立
+			// 容量、实际却再次竞争同一账号，保守跳过整个后续分组。
+			logger.LegacyPrintf("service.api_key", "Warning: skip auto route group %d because it shares eligible accounts with a lower-rate group", candidate.ID)
+			continue
+		}
+		for _, account := range eligible {
+			ownedAccounts[account.ID] = struct{}{}
+			rows = append(rows, accountCapacity{groupID: candidate.ID, account: account})
+			accountIDs = append(accountIDs, account.ID)
+		}
+	}
+	if s.concurrencyService == nil {
+		// 没有并发服务时仍保留模型与端点能力过滤；实际账号调度沿用原有
+		// fail-open 行为，不额外限制已经确认兼容的候选组。
+		capacities := make(map[int64]autoRouteGroupCapacity, len(candidates))
+		for _, row := range rows {
+			capacity := capacities[row.groupID]
+			capacity.Unlimited = true
+			capacities[row.groupID] = capacity
+		}
+		return capacities, true
+	}
+
+	loads, err := s.concurrencyService.GetAccountConcurrencyBatch(ctx, accountIDs)
+	if err != nil {
+		logger.LegacyPrintf("service.api_key", "Warning: load model-aware auto route concurrency failed: %v", err)
+		// Redis 读失败只放开容量判断，不能放开模型/能力判断。
+		capacities := make(map[int64]autoRouteGroupCapacity, len(candidates))
+		for _, row := range rows {
+			capacity := capacities[row.groupID]
+			capacity.Unlimited = true
+			capacities[row.groupID] = capacity
+		}
+		return capacities, true
+	}
+	capacities := make(map[int64]autoRouteGroupCapacity, len(candidates))
+	for _, row := range rows {
+		capacity := capacities[row.groupID]
+		if row.account.Concurrency <= 0 {
+			capacity.Unlimited = true
+			capacities[row.groupID] = capacity
+			continue
+		}
+		capacity.Max += row.account.Concurrency
+		used := loads[row.account.ID]
+		if used < 0 {
+			used = 0
+		}
+		if used > row.account.Concurrency {
+			used = row.account.Concurrency
+		}
+		capacity.Used += used
+		capacities[row.groupID] = capacity
+	}
+	return capacities, true
+}
+
+func autoRouteAccountSupports(account *Account, requirements AutoRouteRequirements) bool {
+	if account == nil {
+		return false
+	}
+	model := strings.TrimSpace(requirements.RequestedModel)
+	if model != "" && !account.IsModelSupported(model) {
+		return false
+	}
+	if requirements.Capability != "" && !account.SupportsOpenAIEndpointCapability(requirements.Capability) {
+		return false
+	}
+	if requirements.ImageCapability != "" && !account.SupportsOpenAIImageCapability(requirements.ImageCapability) {
+		return false
+	}
+	return !requirements.RequireCompact || openAICompactSupportTier(account) > 0
 }
 
 // CheckAPIKeyQuotaAndExpiry checks if the API key is valid for use (not expired, quota not exhausted)
@@ -859,7 +1564,9 @@ func (s *APIKeyService) UpdateQuotaUsed(ctx context.Context, apiKeyID int64, cos
 	// If quota is set and now exhausted, update status
 	if apiKey.Quota > 0 && newQuotaUsed >= apiKey.Quota {
 		apiKey.Status = StatusAPIKeyQuotaExhausted
-		if err := s.apiKeyRepo.Update(ctx, apiKey); err != nil {
+		// 只写 status：这条位于计费热路径，若整行回写会把刚刚原子递增的
+		// quota_used 与限流用量按快照覆盖掉。
+		if err := s.apiKeyRepo.Update(ctx, apiKey, APIKeyUpdateFields{Status: true}); err != nil {
 			return nil // Don't fail the request
 		}
 		// Invalidate cache so next request sees the new status

@@ -12,8 +12,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
 	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
-	"github.com/Wei-Shaw/sub2api/internal/payment/provider"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 )
 
 // --- Cancel & Expire ---
@@ -27,7 +27,7 @@ const (
 	checkPaidResultAlreadyPaid = "already_paid"
 	checkPaidResultCancelled   = "cancelled"
 
-	pendingWxpayReconcileLimit = 20
+	pendingPaymentReconcileLimit = 20
 )
 
 type checkPaidOptions struct {
@@ -158,7 +158,9 @@ func (s *PaymentService) checkPaidWithOptions(ctx context.Context, o *dbent.Paym
 	if queryRef == "" {
 		return ""
 	}
+	finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
 	resp, err := prov.QueryOrder(ctx, queryRef)
+	finishProviderCall()
 	if err != nil {
 		slog.Warn("query upstream failed", "orderID", o.ID, "error", err)
 		return ""
@@ -200,7 +202,9 @@ func (s *PaymentService) checkPaidWithOptions(ctx context.Context, o *dbent.Paym
 		return ""
 	}
 	if cp, ok := prov.(payment.CancelableProvider); ok {
+		finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
 		_ = cp.CancelPayment(ctx, queryRef)
+		finishProviderCall()
 	}
 	return ""
 }
@@ -209,7 +213,9 @@ func requeryPaidOrderOnce(ctx context.Context, prov payment.Provider, queryRef s
 	if prov == nil || strings.TrimSpace(queryRef) == "" {
 		return nil, false
 	}
+	finishProviderCall := servertiming.ObserveDependency(ctx, "payment")
 	resp, err := prov.QueryOrder(ctx, queryRef)
+	finishProviderCall()
 	if err != nil {
 		slog.Warn("query upstream retry failed", "queryRef", queryRef, "error", err)
 		return nil, false
@@ -297,9 +303,9 @@ func (s *PaymentService) VerifyOrderByOutTradeNo(ctx context.Context, outTradeNo
 	return o, nil
 }
 
-// ReconcilePendingWxpayOrders actively checks recent pending WeChat orders so
-// missed provider notifications do not wait until order expiry to fulfill.
-func (s *PaymentService) ReconcilePendingWxpayOrders(ctx context.Context) (int, error) {
+// ReconcilePendingPaymentOrders actively checks recent pending Alipay and WeChat
+// orders so missed provider notifications do not wait until order expiry to fulfill.
+func (s *PaymentService) ReconcilePendingPaymentOrders(ctx context.Context) (int, error) {
 	now := time.Now()
 	orders, err := s.entClient.PaymentOrder.Query().
 		Where(
@@ -310,13 +316,17 @@ func (s *PaymentService) ReconcilePendingWxpayOrders(ctx context.Context) (int, 
 				paymentorder.PaymentTypeHasPrefix(payment.TypeWxpay+"_"),
 				paymentorder.ProviderKeyEQ(payment.TypeWxpay),
 				paymentorder.ProviderKeyHasPrefix(payment.TypeWxpay+"_"),
+				paymentorder.PaymentTypeEQ(payment.TypeAlipay),
+				paymentorder.PaymentTypeHasPrefix(payment.TypeAlipay+"_"),
+				paymentorder.ProviderKeyEQ(payment.TypeAlipay),
+				paymentorder.ProviderKeyHasPrefix(payment.TypeAlipay+"_"),
 			),
 		).
 		Order(dbent.Asc(paymentorder.FieldCreatedAt)).
-		Limit(pendingWxpayReconcileLimit).
+		Limit(pendingPaymentReconcileLimit).
 		All(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("query pending wxpay orders: %w", err)
+		return 0, fmt.Errorf("query pending payment orders: %w", err)
 	}
 
 	recovered := 0
@@ -454,7 +464,7 @@ func (s *PaymentService) createProviderFromInstance(ctx context.Context, inst *d
 	}
 
 	instID := strconv.FormatInt(int64(inst.ID), 10)
-	prov, err := provider.CreateProvider(inst.ProviderKey, instID, cfg)
+	prov, err := createPaymentProviderFromInstance(inst.ProviderKey, instID, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create provider from instance: %w", err)
 	}
