@@ -40,7 +40,7 @@ jobs:
 
   build:
     if: github.ref == 'refs/heads/main'
-    needs: [prepare, ci]
+    needs: [prepare, ci, security]
     permissions:
       contents: read
       packages: write
@@ -80,6 +80,14 @@ jobs:
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  security:
+    name: Required security scan
+    if: github.ref == 'refs/heads/main'
+    needs: prepare
+    uses: ./.github/workflows/security-scan.yml
+    permissions:
+      contents: read
 
   deploy:
     name: Deploy to Vultr production
