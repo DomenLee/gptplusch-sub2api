@@ -55,7 +55,11 @@ func (repo *autoGroupRepo) DowngradeOpenAIAccountGroups(_ context.Context, _, _ 
 }
 
 func (repo *autoGroupRepo) UpdateExtra(_ context.Context, _ int64, updates map[string]any) error {
-	repo.state = updates[OpenAIAutoGroupStateExtraKey].(OpenAIAutoGroupState)
+	state, ok := updates[OpenAIAutoGroupStateExtraKey].(OpenAIAutoGroupState)
+	if !ok {
+		return fmt.Errorf("invalid GPT auto-group state")
+	}
+	repo.state = state
 	return nil
 }
 

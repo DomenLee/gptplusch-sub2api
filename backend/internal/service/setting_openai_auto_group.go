@@ -112,7 +112,10 @@ func (s *SettingService) openAIAutoGroupRuntimeSettings(ctx context.Context) (*O
 	if err != nil {
 		return nil, err
 	}
-	settings := result.(OpenAIAutoGroupSettings)
+	settings, ok := result.(OpenAIAutoGroupSettings)
+	if !ok {
+		return nil, fmt.Errorf("invalid GPT auto-group settings result")
+	}
 	return &settings, nil
 }
 
