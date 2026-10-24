@@ -218,6 +218,29 @@ func TestFirstServeCreateSelectsDefaultGroup(t *testing.T) {
 	require.ErrorContains(t, validateOpenAIFirstServeRouting(a), a.Name)
 }
 
+func TestFirstServeLegacyProxyUsesDefaultGroupAtRequestTime(t *testing.T) {
+	a := firstServeHTTPAccount(t)
+	a.ProxyGroupID = nil
+	legacyProxyID := int64(101)
+	a.ProxyID = &legacyProxyID
+	SetDefaultProxyGroupResolver(firstServeDefaultResolver{
+		firstServeTestResolver: firstServeTestResolver{
+			first: &Proxy{ID: 101, Name: "A", Protocol: "http", Host: "first.test", Port: 8080},
+			next:  &Proxy{ID: 102, Name: "B", Protocol: "http", Host: "next.test", Port: 8080},
+		},
+		groups: []ProxyGroup{{ID: 3, Status: ProxyGroupStatusActive, AvailableMemberCount: 2, ProxyIDs: []int64{101, 102}}},
+	})
+
+	svc := &OpenAIGatewayService{}
+	_, selected, lease, err := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(1, "legacy"), a, []byte(`{"stream":true}`))
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.Equal(t, int64(3), *selected.ProxyGroupID)
+	require.Equal(t, legacyProxyID, *selected.ProxyID)
+	require.Nil(t, a.ProxyGroupID, "legacy account must remain unchanged")
+	lease.finish(nil, nil)
+}
+
 func TestFirstServeEnableDefaultsToFullWithoutChangingPassthrough(t *testing.T) {
 	a := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	extra := map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeFirstServe, "openai_passthrough": false}

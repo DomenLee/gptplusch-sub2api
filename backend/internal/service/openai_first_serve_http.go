@@ -162,6 +162,11 @@ func (s *OpenAIGatewayService) prepareFirstServeRoute(ctx context.Context, c *gi
 	if l := firstServeHTTPLease(ctx); l != nil && l.accountID == account.ID {
 		return ctx, account, nil, nil // internal retry belongs to the same request
 	}
+	routingAccount := *account
+	if err := assignDefaultFirstServeProxyGroup(ctx, &routingAccount); err != nil {
+		return ctx, account, nil, err
+	}
+	account = &routingAccount
 	if err := validateOpenAIFirstServeRouting(account); err != nil {
 		return ctx, account, nil, err
 	}
