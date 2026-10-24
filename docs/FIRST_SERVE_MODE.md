@@ -6,6 +6,7 @@
 
 - 新建、导入 OpenAI OAuth、Setup Token 和 API Key 账号时，默认写入首服模式。
 - OAuth 账号默认设置 Codex 指纹收敛为 `full`。这不会修改 `openai_passthrough`。
+- 旧版本中仅绑定单个代理的首服账号，请求时会按原代理在可用代理组中自动匹配；匹配只作用于当前请求，不会静默修改账号配置。
 - 首次建立组合时生成一个路由 ID。后续切换代理时更换出口 IP 和设备指纹，复用同一个路由 ID。
 - HTTP 与 WebSocket 同账号共享范围默认是 `reuse_scope: "account"`；按会话模式仍可显式选择 `session`。
 - `previous_response_id` 保留在客户端请求体中。到达轮换时间后不会因为该字段而继续停留旧代理，也不会把它改成路由 ID。
