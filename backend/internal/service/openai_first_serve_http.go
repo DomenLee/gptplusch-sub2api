@@ -337,6 +337,10 @@ func (l *openAIFirstServeHTTPLease) finish(result *OpenAIForwardResult, err erro
 	switch {
 	case err != nil:
 		last.Outcome = "request_failed"
+		// A transport failure invalidates the cached upstream route. Mark the
+		// current generation for rotation so the next request selects another
+		// available proxy instead of retrying the failed one.
+		state.status.RotationPending = true
 		state.publish("connection_failed", now)
 	case l.observed:
 		last.Outcome = "measured"

@@ -367,6 +367,7 @@ func TestFirstServeHTTPRequestPreservesContinuationAndNonTarget(t *testing.T) {
 	require.Equal(t, lease.conversationID, gjson.Get(embedded, "thread_id").String())
 	lease.finish(nil, errors.New("test failure"))
 	require.Equal(t, "connection_failed", lease.entry.state.status.Reason)
+	require.True(t, lease.entry.state.status.RotationPending, "a failed request must rotate the cached proxy on the next request")
 	a.Extra["openai_apikey_responses_websockets_v2_mode"] = OpenAIWSIngressModeCtxPool
 	_, same, off, err := svc.prepareFirstServeHTTP(context.Background(), firstServeHTTPContext(1, "session"), a, body)
 	require.NoError(t, err)
