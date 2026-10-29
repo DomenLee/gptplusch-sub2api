@@ -281,6 +281,7 @@ type OpenAIForwardResult struct {
 	ResponseHeaders       http.Header
 	Duration              time.Duration
 	FirstTokenMs          *int
+	autoGroupFirstTokenMS *int // Internal cumulative WS retry metric; usage-log timing is unchanged.
 	ClientDisconnect      bool
 	ImageCount            int
 	ImageSize             string

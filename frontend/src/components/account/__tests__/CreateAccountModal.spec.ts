@@ -226,6 +226,21 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(wrapper.findComponent(GroupSelectorStub).props('modelValue')).toEqual([1, 2])
     wrapper.unmount()
   })
+  it('excludes skipped groups from automatic defaults while preserving explicit selection', async () => {
+    getAutoGroupSettingsMock.mockResolvedValue({ default_high_rate: true, skip_group_ids: [1], enabled: false })
+    const wrapper = mountModal([
+      { id: 1, name: 'Skipped', platform: 'openai', status: 'active', rate_multiplier: 3 },
+      { id: 2, name: 'Available', platform: 'openai', status: 'active', rate_multiplier: 4 },
+    ])
+    await selectButtonByText(wrapper, 'OpenAI')
+    await flushPromises()
+    expect(wrapper.findComponent(GroupSelectorStub).props('modelValue')).toEqual([2])
+    await wrapper.get('[data-testid="select-pricing-groups"]').trigger('click')
+    await selectButtonByText(wrapper, 'API Key')
+    await flushPromises()
+    expect(wrapper.findComponent(GroupSelectorStub).props('modelValue')).toEqual([1, 2])
+    wrapper.unmount()
+  })
   it('creates an API key with temporary scheduling disabled and resets the toggle', async () => {
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'OpenAI')

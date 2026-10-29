@@ -112,6 +112,7 @@ vi.mock("@/api", () => ({
     },
     groups: {
       getAll: getGroups,
+      getAllIncludingInactive: getGroups,
     },
     proxies: {
       list: listProxies,
@@ -124,6 +125,16 @@ vi.mock("@/api", () => ({
     },
   },
 }));
+
+vi.mock("@/api/admin/groups", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/api/admin/groups")>();
+  return {
+    ...actual,
+    getAllIncludingInactive: getGroups,
+    default: { ...actual.default, getAllIncludingInactive: getGroups },
+    groupsAPI: { ...actual.groupsAPI, getAllIncludingInactive: getGroups },
+  };
+});
 
 vi.mock("@/stores", () => ({
   useAppStore: () => ({

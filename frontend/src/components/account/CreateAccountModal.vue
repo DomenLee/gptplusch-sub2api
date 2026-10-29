@@ -5132,6 +5132,7 @@ const canExchangeCode = computed(() => {
 // Watchers
 const autoGroupSelectionTouched = ref(false)
 const autoGroupDefaultHighRate = ref(false)
+const autoGroupSkipIDs = ref<number[]>([])
 const autoGroupDefaultIDs = ref<number[]>([])
 const autoGroupSettingsError = ref('')
 let autoGroupLoadSequence = 0
@@ -5143,6 +5144,7 @@ async function loadAutoGroupDefaults() {
   try {
     const settings = await adminAPI.settings.getOpenAIAutoGroupSettings()
     if (sequence !== autoGroupLoadSequence || !props.show) return
+    autoGroupSkipIDs.value = settings.skip_group_ids ?? []
     autoGroupDefaultHighRate.value = settings.default_high_rate
   } catch {
     if (sequence !== autoGroupLoadSequence || !props.show) return
@@ -5163,7 +5165,7 @@ watch(
 )
 
 watch(
-  [autoGroupDefaultHighRate, () => props.groups, () => form.type, () => form.platform],
+  [autoGroupDefaultHighRate, autoGroupSkipIDs, () => props.groups, () => form.type, () => form.platform],
   () => {
     if (!props.show || autoGroupSelectionTouched.value) return
     if (form.platform !== 'openai' || !autoGroupDefaultHighRate.value) {
@@ -5172,7 +5174,7 @@ watch(
       autoGroupDefaultIDs.value = []
       return
     }
-    autoGroupDefaultIDs.value = defaultOpenAIHighRateGroupIDs(props.groups, form.type)
+    autoGroupDefaultIDs.value = defaultOpenAIHighRateGroupIDs(props.groups, form.type).filter(id => !autoGroupSkipIDs.value.includes(id))
     form.group_ids = [...autoGroupDefaultIDs.value]
   },
   { deep: true }

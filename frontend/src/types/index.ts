@@ -1263,11 +1263,22 @@ export interface Account {
   // Extra fields including Codex usage, OpenAI compact capability, and model-level rate limits.
   extra?: (CodexUsageSnapshot & OpenAICompactState & {
     openai_auto_group_state?: {
-      status: 'downgraded' | 'failed'
+      status: 'tracking' | 'downgraded' | 'upgraded' | 'observing' | 'paused' | 'failed'
       at: string
       status_code: number
       failure_count: number
-      window_minutes: number
+      window_minutes?: number
+      protected_until?: string
+      paused?: boolean
+      reason?: string
+      cohort?: string
+      request_count?: number
+      sample_count?: number
+      slow_count?: number
+      recovery_count?: number
+      failure_window?: number
+      latency_window?: number
+      recovery_samples?: number
       message: string
       from_group_ids?: number[]
       to_group_ids?: number[]

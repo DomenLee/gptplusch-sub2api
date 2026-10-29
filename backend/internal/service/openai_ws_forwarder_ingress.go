@@ -1041,6 +1041,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return nil, errors.New("upstream websocket lease is nil")
 		}
 		turnStart := time.Now()
+		autoGroupAttemptStart := s.beginOpenAIAutoGroupWSTiming(ctx, account, turnStart)
+		defer autoGroupAttemptStart()
 		wroteDownstream := false
 		if err := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
 			return nil, wrapOpenAIWSIngressTurnError(
@@ -1364,6 +1366,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					ResponseHeaders:               lease.HandshakeHeaders(),
 					Duration:                      time.Since(turnStart),
 					FirstTokenMs:                  firstTokenMs,
+					ClientDisconnect:              clientDisconnected,
+				}
+				if firstTokenMs != nil {
+					ms := s.openAIAutoGroupWSFirstToken(ctx, account, *firstTokenMs)
+					result.autoGroupFirstTokenMS = &ms
 				}
 				if replayInput := replayCollector.Items(); len(replayInput) > 0 {
 					result.wsReplayInput = replayInput
@@ -2051,6 +2058,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		result, relayErr := sendAndRelay(turn, sessionLease, currentPayload, currentPayloadBytes, currentOriginalModel, currentImageBillingModel, currentImageSizeTier, currentImageInputSize, currentRequestedReasoningEffort)
 		if relayErr != nil {
+			if ctx.Err() == nil {
+				s.observeOpenAIAutoGroupFailure(ctx, account, http.StatusBadGateway, nil)
+			}
 			lastTurnClean = false
 			if isOpenAIWSSessionPreempted(ctx) {
 				sessionLease.MarkBroken()

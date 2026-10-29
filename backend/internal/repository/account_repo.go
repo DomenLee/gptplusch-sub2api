@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -684,7 +685,8 @@ func lockAndMergeAccountProbeExtra(
 				false
 			),
 			extra -> 'opencode_go_usage_auto_refresh',
-			extra -> 'opencode_go_usage_snapshot'
+			extra -> 'opencode_go_usage_snapshot',
+            extra -> 'openai_auto_group_state'
 		FROM accounts
 		WHERE id = $1 AND deleted_at IS NULL
 		FOR NO KEY UPDATE
@@ -713,6 +715,7 @@ func lockAndMergeAccountProbeExtra(
 		currentOllamaSnapshot          []byte
 		currentOpenCodeAutoRefresh     []byte
 		currentOpenCodeSnapshot        []byte
+		currentAutoGroupState          []byte
 	)
 	if err := rows.Scan(
 		&identityUnchanged,
@@ -727,6 +730,7 @@ func lockAndMergeAccountProbeExtra(
 		&opencodeGroupIdentityUnchanged,
 		&currentOpenCodeAutoRefresh,
 		&currentOpenCodeSnapshot,
+		&currentAutoGroupState,
 	); err != nil {
 		return nil, err
 	}
@@ -735,6 +739,15 @@ func lockAndMergeAccountProbeExtra(
 	}
 
 	extra := copyJSONMap(normalizeJSONMap(account.Extra))
+	delete(extra, service.OpenAIAutoGroupStateExtraKey)
+	delete(extra, "openai_auto_group_resume")
+	if len(currentAutoGroupState) > 0 && string(currentAutoGroupState) != "null" {
+		var state any
+		if err := json.Unmarshal(currentAutoGroupState, &state); err != nil {
+			return nil, err
+		}
+		extra[service.OpenAIAutoGroupStateExtraKey] = state
+	}
 	for _, key := range []string{
 		service.UpstreamBillingProbeEnabledExtraKey,
 		service.UpstreamBillingRateSyncEnabledExtraKey,
@@ -1976,26 +1989,34 @@ func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, gro
 		// 已处于外部事务中（ErrTxStarted），复用当前 client
 		txClient = r.client
 	}
-	if _, err := txClient.Account.Query().Where(dbaccount.IDEQ(accountID), dbaccount.DeletedAtIsNil()).ForUpdate().Only(ctx); err != nil {
-		return err
-	}
-	existingGroupIDs, err := r.loadAccountGroupIDs(ctx, accountID)
+	boundAccount, err := txClient.Account.Query().Where(dbaccount.IDEQ(accountID), dbaccount.DeletedAtIsNil()).ForUpdate().Only(ctx)
 	if err != nil {
 		return err
+	}
+	bindings, err := txClient.AccountGroup.Query().Where(dbaccountgroup.AccountIDEQ(accountID)).Order(dbent.Asc(dbaccountgroup.FieldPriority), dbent.Asc(dbaccountgroup.FieldGroupID)).All(ctx)
+	existingGroupIDs := make([]int64, 0, len(bindings))
+	for _, binding := range bindings {
+		existingGroupIDs = append(existingGroupIDs, binding.GroupID)
+	}
+	if err != nil {
+		return err
+	}
+	// Saving the same groups must not renumber custom priorities and make the
+	// next automatic evaluation mistake an ordinary edit for a manual group change.
+	if slices.Equal(existingGroupIDs, groupIDs) {
+		return nil
 	}
 	if err := lockLiveGroups(ctx, txClient, groupIDs); err != nil {
 		return err
 	}
 
+	if _, managed := boundAccount.Extra[service.OpenAIAutoGroupStateExtraKey]; managed && boundAccount.Platform == service.PlatformOpenAI && !slices.Equal(existingGroupIDs, groupIDs) {
+		if err := pauseAutoGroupForManualBindings(ctx, txClient, []int64{accountID}); err != nil {
+			return err
+		}
+	}
 	if _, err := txClient.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(accountID)).Exec(ctx); err != nil {
 		return err
-	}
-
-	if len(groupIDs) == 0 {
-		if tx != nil {
-			return tx.Commit()
-		}
-		return nil
 	}
 
 	builders := make([]*dbent.AccountGroupCreate, 0, len(groupIDs))
@@ -2007,8 +2028,10 @@ func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, gro
 		)
 	}
 
-	if _, err := txClient.AccountGroup.CreateBulk(builders...).Save(ctx); err != nil {
-		return err
+	if len(builders) > 0 {
+		if _, err := txClient.AccountGroup.CreateBulk(builders...).Save(ctx); err != nil {
+			return err
+		}
 	}
 
 	if tx != nil {
@@ -3621,6 +3644,7 @@ func (r *accountRepository) loadAccountGroupIDs(ctx context.Context, accountID i
 	entries, err := r.client.AccountGroup.
 		Query().
 		Where(dbaccountgroup.AccountIDEQ(accountID)).
+		Order(dbent.Asc(dbaccountgroup.FieldPriority), dbent.Asc(dbaccountgroup.FieldGroupID)).
 		All(ctx)
 	if err != nil {
 		return nil, err
