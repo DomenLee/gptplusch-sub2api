@@ -24,6 +24,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, prepareErr
 	}
 	defer func() { firstServe.finish(firstServeResult, firstServeErr) }()
+	finishAutoGroup := s.beginOpenAIAutoGroup(ctx, account)
+	defer func() { finishAutoGroup(firstServeResult, firstServeErr) }()
 	if err := resolveDefaultProxyGroupAccount(ctx, account); err != nil {
 		return nil, err
 	}

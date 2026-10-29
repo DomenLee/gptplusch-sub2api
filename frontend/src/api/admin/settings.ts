@@ -1328,10 +1328,23 @@ export interface RateLimit429CooldownSettings {
 }
 
 export interface OpenAIAutoGroupSettings {
+  skip_group_ids: number[];
   default_high_rate: boolean;
   enabled: boolean;
-  window_minutes: number;
+  window_minutes?: number;
+  failure_window: number;
   failure_threshold: number;
+  latency_enabled: boolean;
+  latency_window: number;
+  slow_threshold: number;
+  first_token_seconds: number;
+  recovery_enabled: boolean;
+  recovery_samples: number;
+  recovery_fast_percent: number;
+  recovery_median_seconds: number;
+  recovery_fast_streak: number;
+  protection_minutes: number;
+  observe_only: boolean;
 }
 
 export async function getOpenAIAutoGroupSettings(): Promise<OpenAIAutoGroupSettings> {

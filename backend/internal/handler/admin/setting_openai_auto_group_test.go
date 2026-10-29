@@ -37,9 +37,13 @@ func TestOpenAIAutoGroupSettingsAPI(t *testing.T) {
 		body   string
 		status int
 	}{
-		{name: "valid", body: `{"enabled":true,"default_high_rate":true,"window_minutes":10,"failure_threshold":6}`, status: http.StatusOK},
+		{name: "valid", body: `{"enabled":true,"default_high_rate":true,"window_minutes":10,"failure_threshold":6,"skip_group_ids":[7,8]}`, status: http.StatusOK},
+		{name: "legacy partial save preserves skipped groups", body: `{"enabled":true}`, status: http.StatusOK},
+		{name: "invalid skip ID", body: `{"skip_group_ids":[0]}`, status: http.StatusBadRequest},
+		{name: "duplicate skip ID", body: `{"skip_group_ids":[7,7]}`, status: http.StatusBadRequest},
+		{name: "fractional skip ID", body: `{"skip_group_ids":[7.5]}`, status: http.StatusBadRequest},
 		{name: "fractional window", body: `{"window_minutes":1.5,"failure_threshold":3}`, status: http.StatusBadRequest},
-		{name: "invalid window", body: `{"window_minutes":0,"failure_threshold":3}`, status: http.StatusBadRequest},
+		{name: "invalid request window", body: `{"failure_window":0,"failure_threshold":3}`, status: http.StatusBadRequest},
 		{name: "invalid threshold", body: `{"window_minutes":5,"failure_threshold":1001}`, status: http.StatusBadRequest},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -58,4 +62,5 @@ func TestOpenAIAutoGroupSettingsAPI(t *testing.T) {
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Contains(t, recorder.Body.String(), `"window_minutes":10`)
 	require.Contains(t, recorder.Body.String(), `"failure_threshold":6`)
+	require.Contains(t, recorder.Body.String(), `"skip_group_ids":[7,8]`)
 }

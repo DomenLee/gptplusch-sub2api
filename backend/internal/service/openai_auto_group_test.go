@@ -48,10 +48,31 @@ type autoGroupRepo struct {
 	bound   []int64
 }
 
-func (repo *autoGroupRepo) DowngradeOpenAIAccountGroups(_ context.Context, _, _ int64, state OpenAIAutoGroupState) (bool, error) {
-	repo.calls++
-	repo.state = state
-	return repo.err == nil, repo.err
+func (repo *autoGroupRepo) ProcessOpenAIAutoGroup(_ context.Context, _ int64, generation string, decide func(*Account) (*OpenAIAutoGroupDecision, error)) (bool, error) {
+	if repo.current == nil {
+		repo.current = &Account{ID: 20, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, GroupIDs: []int64{7}}
+	}
+	old := ReadOpenAIAutoGroupState(repo.current.Extra)
+	if old.Generation != generation || old.Paused {
+		return false, nil
+	}
+	d, err := decide(repo.current)
+	if err != nil || d == nil {
+		return false, err
+	}
+	if d.Action != "" {
+		repo.calls++
+		if repo.err != nil {
+			return false, repo.err
+		}
+		d.State.Status = "downgraded"
+		d.State.Generation = fmt.Sprint(repo.calls)
+		d.State.RestoreBindings = []OpenAIAutoGroupBinding{{ID: 7, Priority: 1}}
+		repo.current.GroupIDs = []int64{1}
+	}
+	repo.state = d.State
+	repo.current.Extra = map[string]any{OpenAIAutoGroupStateExtraKey: d.State}
+	return d.Action != "", nil
 }
 
 func (repo *autoGroupRepo) UpdateExtra(_ context.Context, _ int64, updates map[string]any) error {
@@ -64,6 +85,9 @@ func (repo *autoGroupRepo) UpdateExtra(_ context.Context, _ int64, updates map[s
 }
 
 func (repo *autoGroupRepo) GetByID(context.Context, int64) (*Account, error) {
+	if repo.current == nil {
+		repo.current = &Account{ID: 20, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, GroupIDs: []int64{7}}
+	}
 	return repo.current, nil
 }
 
@@ -89,28 +113,32 @@ func (repo *autoGroupGroups) ListActiveByPlatform(context.Context, string) ([]Gr
 
 type autoGroupCounter struct {
 	TempUnschedCache
-	seen  map[string]bool
-	calls int
-	err   error
+	history OpenAIAutoGroupHistory
+	seen    map[string]bool
+	calls   int
+	err     error
 }
 
-func (counter *autoGroupCounter) RecordOpenAIAutoGroupFailure(_ context.Context, accountID int64, revision, requestID string, _, threshold int) (int64, bool, error) {
+func (counter *autoGroupCounter) RecordOpenAIAutoGroupSample(_ context.Context, _ int64, version string, sample OpenAIAutoGroupSample, p *OpenAIAutoGroupSettings, low bool) (*OpenAIAutoGroupHistory, bool, error) {
 	if counter.err != nil {
-		return 0, false, counter.err
+		return nil, false, counter.err
 	}
-	key := fmt.Sprintf("%d:%s:%s", accountID, revision, requestID)
-	if counter.seen[key] {
-		return int64(counter.calls), false, nil
+	if counter.history.Version != version {
+		counter.history = OpenAIAutoGroupHistory{Version: version}
 	}
-	counter.seen[key] = true
-	counter.calls++
-	return int64(counter.calls), counter.calls >= threshold, nil
+	added := UpdateOpenAIAutoGroupHistory(&counter.history, sample, p, low)
+	if added {
+		counter.calls++
+	}
+	return &counter.history, added, nil
 }
 
 func autoGroupTestService(t *testing.T) (*OpenAIGatewayService, *autoGroupRepo, *autoGroupCounter) {
 	t.Helper()
 	settings := NewSettingService(&autoGroupSettingRepo{}, nil)
-	require.NoError(t, settings.SetOpenAIAutoGroupSettings(context.Background(), &OpenAIAutoGroupSettings{Enabled: true, WindowMinutes: 5, FailureThreshold: 3}))
+	policy := DefaultOpenAIAutoGroupSettings()
+	policy.Enabled = true
+	require.NoError(t, settings.SetOpenAIAutoGroupSettings(context.Background(), policy))
 	repo := &autoGroupRepo{}
 	counter := &autoGroupCounter{seen: make(map[string]bool)}
 	return &OpenAIGatewayService{accountRepo: repo, settingService: settings, rateLimitService: &RateLimitService{tempUnschedCache: counter}}, repo, counter
@@ -148,7 +176,9 @@ func TestOpenAIAutoGroupSettings(t *testing.T) {
 
 func TestOpenAIAutoGroupCreateDefaultsByMultiplier(t *testing.T) {
 	settings := NewSettingService(&autoGroupSettingRepo{}, nil)
-	require.NoError(t, settings.SetOpenAIAutoGroupSettings(context.Background(), &OpenAIAutoGroupSettings{DefaultHighRate: true, WindowMinutes: 5, FailureThreshold: 3}))
+	policy := DefaultOpenAIAutoGroupSettings()
+	policy.DefaultHighRate = true
+	require.NoError(t, settings.SetOpenAIAutoGroupSettings(context.Background(), policy))
 	groups := &autoGroupGroups{groups: []Group{
 		{ID: 1, Name: "自用", Platform: PlatformOpenAI, Status: StatusActive, RateMultiplier: 3},
 		{ID: 2, Name: "不降智", Platform: PlatformOpenAI, Status: StatusActive, RateMultiplier: 1.5},
@@ -207,11 +237,12 @@ func TestOpenAIAutoGroupSkipsNonTargetFailures(t *testing.T) {
 	other := *account
 	other.Platform = PlatformAnthropic
 	svc.observeOpenAIAutoGroupFailure(ctx, &other, 429, nil)
-	require.Zero(t, counter.calls)
+	require.Equal(t, 1, counter.calls)
+	require.False(t, counter.history.Requests[0].Overload)
 	require.Zero(t, repo.calls)
 	require.NoError(t, svc.settingService.SetOpenAIAutoGroupSettings(context.Background(), DefaultOpenAIAutoGroupSettings()))
 	svc.observeOpenAIAutoGroupFailure(ctx, account, 429, nil)
-	require.Zero(t, counter.calls)
+	require.Equal(t, 1, counter.calls)
 }
 
 func TestOpenAIAutoGroupFailureIsPersisted(t *testing.T) {
@@ -262,4 +293,89 @@ func TestOpenAIAutoGroupWebSocketTurnsAndMembership(t *testing.T) {
 	repo.current.GroupIDs = []int64{1}
 	require.Error(t, hooks.BeforeTurn(5))
 	require.Equal(t, 1, hookCalls)
+}
+
+func TestOpenAIAutoGroupSkipGroupsBlocksAllAccountRules(t *testing.T) {
+	for _, recovering := range []bool{false, true} {
+		t.Run(fmt.Sprint(recovering), func(t *testing.T) {
+			svc, repo, counter := autoGroupTestService(t)
+			p, err := svc.settingService.GetOpenAIAutoGroupSettings(context.Background())
+			require.NoError(t, err)
+			p.LatencyEnabled, p.RecoveryEnabled = true, true
+			p.SkipGroupIDs = []int64{99}
+			require.NoError(t, svc.settingService.SetOpenAIAutoGroupSettings(context.Background(), p))
+			repo.current = &Account{ID: 20, Platform: PlatformOpenAI, GroupIDs: []int64{7, 99}}
+			if recovering {
+				repo.current.GroupIDs = []int64{7}
+				repo.current.Extra = map[string]any{OpenAIAutoGroupStateExtraKey: OpenAIAutoGroupState{RestoreBindings: []OpenAIAutoGroupBinding{{ID: 99, Priority: 1}}}}
+			}
+			for i := 0; i < 4; i++ {
+				ctx, _ := autoGroupTestRequest(3)
+				ms := 12000
+				svc.beginOpenAIAutoGroup(ctx, repo.current)(&OpenAIForwardResult{Model: "model", Stream: true, FirstTokenMs: &ms}, nil)
+				svc.observeOpenAIAutoGroupFailure(ctx, repo.current, 429, nil)
+			}
+			require.Zero(t, counter.calls)
+			require.Zero(t, repo.calls)
+		})
+	}
+}
+
+func TestOpenAIAutoGroupSkipGroupsRecheckedForInflightRequests(t *testing.T) {
+	for _, changeSettings := range []bool{false, true} {
+		t.Run(fmt.Sprint(changeSettings), func(t *testing.T) {
+			svc, repo, counter := autoGroupTestService(t)
+			p, _ := svc.settingService.GetOpenAIAutoGroupSettings(context.Background())
+			p.SkipGroupIDs = []int64{99}
+			require.NoError(t, svc.settingService.SetOpenAIAutoGroupSettings(context.Background(), p))
+			account := &Account{ID: 20, Platform: PlatformOpenAI}
+			ctx, _ := autoGroupTestRequest(3)
+			finish := svc.beginOpenAIAutoGroup(ctx, account)
+			if changeSettings {
+				p.SkipGroupIDs = []int64{7}
+				require.NoError(t, svc.settingService.SetOpenAIAutoGroupSettings(context.Background(), p))
+			} else {
+				repo.current.GroupIDs = append(repo.current.GroupIDs, 99)
+			}
+			ms := 12000
+			finish(&OpenAIForwardResult{Model: "model", Stream: true, FirstTokenMs: &ms}, nil)
+			require.Zero(t, counter.calls)
+			require.Zero(t, repo.calls)
+			require.False(t, repo.state.Paused, "a configured skip does not become a permanent manual pause")
+		})
+	}
+}
+
+func TestOpenAIAutoGroupSkipDefaultsAndCachedSettings(t *testing.T) {
+	settings := NewSettingService(&autoGroupSettingRepo{}, nil)
+	p := DefaultOpenAIAutoGroupSettings()
+	p.DefaultHighRate = true
+	p.SkipGroupIDs = []int64{1}
+	require.NoError(t, settings.SetOpenAIAutoGroupSettings(context.Background(), p))
+	p.SkipGroupIDs[0] = 2
+	cached, err := settings.openAIAutoGroupRuntimeSettings(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, cached.SkipGroupIDs)
+	cached.SkipGroupIDs[0] = 2
+	groups := &autoGroupGroups{groups: []Group{
+		{ID: 1, Platform: PlatformOpenAI, Status: StatusActive, RateMultiplier: 3},
+		{ID: 2, Platform: PlatformOpenAI, Status: StatusActive, RateMultiplier: 4},
+	}}
+	ids, applied, err := openAIDefaultHighRateGroups(context.Background(), settings, groups, PlatformOpenAI, AccountTypeOAuth)
+	require.NoError(t, err)
+	require.True(t, applied)
+	require.Equal(t, []int64{2}, ids)
+	p.SkipGroupIDs = []int64{1, 2}
+	require.NoError(t, settings.SetOpenAIAutoGroupSettings(context.Background(), p))
+	_, _, err = openAIDefaultHighRateGroups(context.Background(), settings, groups, PlatformOpenAI, AccountTypeOAuth)
+	require.ErrorContains(t, err, "no compatible active groups")
+	for _, ids := range [][]int64{{-1}, {1, 1}, make([]int64, 1001)} {
+		p.SkipGroupIDs = ids
+		require.Error(t, settings.SetOpenAIAutoGroupSettings(context.Background(), p))
+	}
+	p.SkipGroupIDs = []int64{}
+	require.NoError(t, settings.SetOpenAIAutoGroupSettings(context.Background(), p))
+	ids, _, err = openAIDefaultHighRateGroups(context.Background(), settings, groups, PlatformOpenAI, AccountTypeOAuth)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 2}, ids)
 }

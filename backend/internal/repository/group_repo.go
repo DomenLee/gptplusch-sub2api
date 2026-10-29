@@ -1217,6 +1217,14 @@ func (r *groupRepository) BindAccountsToGroup(ctx context.Context, groupID int64
 		defer func() { _ = tx.Rollback() }()
 		exec = tx.Client()
 	}
+	// Lock accounts before groups, matching the automatic grouping lock order.
+	if _, err := exec.ExecContext(ctx, `SELECT id FROM accounts WHERE id = ANY($1) ORDER BY id FOR UPDATE`, pq.Array(accountIDs)); err != nil {
+		return err
+	}
+	if err := pauseAutoGroupForManualBindings(ctx, exec, accountIDs, groupID); err != nil {
+		return err
+	}
+
 	if err := lockLiveGroups(ctx, exec, []int64{groupID}); err != nil {
 		return err
 	}

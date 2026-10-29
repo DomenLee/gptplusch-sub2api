@@ -98,6 +98,8 @@ func cloneAccountJSONMap(value map[string]any) (map[string]any, error) {
 }
 
 var duplicateAccountDiscardedExtraKeys = map[string]struct{}{
+	OpenAIAutoGroupStateExtraKey: {},
+	"openai_auto_group_resume":   {},
 	// A retry identity belongs to the operation that created one copy, not to later copies.
 	duplicateAccountOperationIDExtraKey: {},
 	// External sync identity belongs to one local account only.
@@ -555,6 +557,8 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
+	delete(accountExtra, OpenAIAutoGroupStateExtraKey)
+	delete(accountExtra, "openai_auto_group_resume")
 	accountExtra = DefaultOpenAIFirstServeExtra(input.Platform, input.Type, accountExtra)
 	accountExtra, err = normalizeOpenAIAutoResetCreditExtra(input.Platform, input.Type, false, accountExtra)
 	if err != nil {
@@ -658,6 +662,27 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 }
 
 func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error) {
+	// This command must update only the automation state. The regular Extra
+	// editor intentionally replaces configuration and cannot handle a partial command.
+	if raw, exists := input.Extra["openai_auto_group_resume"]; exists {
+		resume, ok := raw.(bool)
+		rest := *input
+		rest.Extra = nil
+		rest.SkipMixedChannelCheck = false
+		if !ok || !resume || len(input.Extra) != 1 || !reflect.ValueOf(rest).IsZero() {
+			return nil, infraerrors.BadRequest("INVALID_AUTO_GROUP_RESUME", "resume automatic grouping must be a standalone true command")
+		}
+		repo, ok := s.accountRepo.(interface {
+			ResumeOpenAIAutoGroup(context.Context, int64) error
+		})
+		if !ok {
+			return nil, fmt.Errorf("automatic grouping resume is unavailable")
+		}
+		if err := repo.ResumeOpenAIAutoGroup(ctx, id); err != nil {
+			return nil, err
+		}
+		return s.accountRepo.GetByID(ctx, id)
+	}
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -768,6 +793,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		delete(normalizedExtra, OllamaCloudUsageSnapshotExtraKey)
 		delete(normalizedExtra, OpenCodeGoUsageAutoRefreshExtraKey)
 		delete(normalizedExtra, OpenCodeGoUsageSnapshotExtraKey)
+		delete(normalizedExtra, OpenAIAutoGroupStateExtraKey)
 		// 保留配额用量和专用服务受管字段，防止普通账号编辑意外覆盖。
 		for _, key := range []string{
 			"quota_used",
@@ -1046,6 +1072,8 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	delete(updates, OllamaCloudUsageSnapshotExtraKey)
 	delete(updates, OpenCodeGoUsageAutoRefreshExtraKey)
 	delete(updates, OpenCodeGoUsageSnapshotExtraKey)
+	delete(updates, OpenAIAutoGroupStateExtraKey)
+	delete(updates, "openai_auto_group_resume")
 	if _, exists := updates[openAILongContextBillingEnabledKey]; exists {
 		account, err := s.accountRepo.GetByID(ctx, id)
 		if err != nil {
@@ -1075,6 +1103,8 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	delete(input.Extra, OllamaCloudUsageSnapshotExtraKey)
 	delete(input.Extra, OpenCodeGoUsageAutoRefreshExtraKey)
 	delete(input.Extra, OpenCodeGoUsageSnapshotExtraKey)
+	delete(input.Extra, OpenAIAutoGroupStateExtraKey)
+	delete(input.Extra, "openai_auto_group_resume")
 
 	if len(input.AccountIDs) == 0 && input.Filters != nil {
 		accountIDs, err := s.resolveBulkUpdateTargetIDs(ctx, input.Filters)

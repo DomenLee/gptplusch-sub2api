@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import AccountStatusIndicator from '../AccountStatusIndicator.vue'
 import type { Account } from '@/types'
+
+const { updateAccount } = vi.hoisted(() => ({ updateAccount: vi.fn() }))
+vi.mock('@/api/admin', () => ({ adminAPI: { accounts: { update: updateAccount } } }))
 
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
@@ -59,6 +62,35 @@ describe('AccountStatusIndicator', () => {
     expect(wrapper.text()).toContain('admin.settings.openaiAutoGroup.downgraded')
     await wrapper.setProps({ account: makeAccount({ platform: 'openai', extra: { openai_auto_group_state: { status: 'failed', at: '2026-10-23T00:00:00Z', status_code: 503, failure_count: 3, window_minutes: 5, message: 'no low-rate groups' } } }) })
     expect(wrapper.get('[role="alert"]').text()).toContain('admin.settings.openaiAutoGroup.accountFailed')
+    wrapper.unmount()
+  })
+  it('resumes manual accounts explicitly and shows failures beside the action', async () => {
+    const account = makeAccount({ platform: 'openai', extra: { openai_auto_group_state: { status: 'paused', paused: true, at: '', status_code: 0, failure_count: 0, message: 'manual' } } })
+    updateAccount.mockRejectedValueOnce(new Error('database unavailable'))
+    const wrapper = mount(AccountStatusIndicator, { props: { account }, global: { stubs: { Icon: true } } })
+    const button = wrapper.findAll('button').find(item => item.text().includes('openaiAutoGroup.resume'))!
+    await button.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('resumeFailed')
+    updateAccount.mockResolvedValueOnce(makeAccount({ platform: 'openai', extra: { openai_auto_group_state: { status: 'tracking', at: '', status_code: 0, failure_count: 0, message: '' } } }))
+    await button.trigger('click')
+    await flushPromises()
+    expect(updateAccount).toHaveBeenLastCalledWith(1, { extra: { openai_auto_group_resume: true } })
+    expect(wrapper.text()).toContain('openaiAutoGroup.tracking')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+  it('does not apply an old resume response to a reused account row', async () => {
+    let resolve!: (account: Account) => void
+    updateAccount.mockReturnValueOnce(new Promise<Account>(done => { resolve = done }))
+    const state = { status: 'paused' as const, paused: true, at: '', status_code: 0, failure_count: 0, message: '' }
+    const wrapper = mount(AccountStatusIndicator, { props: { account: makeAccount({ id: 1, platform: 'openai', extra: { openai_auto_group_state: state } }) }, global: { stubs: { Icon: true } } })
+    await wrapper.findAll('button').find(item => item.text().includes('openaiAutoGroup.resume'))!.trigger('click')
+    await wrapper.setProps({ account: makeAccount({ id: 2, platform: 'openai', extra: { openai_auto_group_state: state } }) })
+    resolve(makeAccount({ id: 1, platform: 'openai', extra: { openai_auto_group_state: { ...state, status: 'tracking', paused: false } } }))
+    await flushPromises()
+    expect(wrapper.text()).toContain('openaiAutoGroup.paused')
+    expect(wrapper.text()).not.toContain('openaiAutoGroup.tracking')
     wrapper.unmount()
   })
   it('Claude 5 系列模型限流时显示 Opus 和 Sonnet 的短别名', () => {

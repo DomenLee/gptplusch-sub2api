@@ -1,10 +1,20 @@
 <template>
   <div class="flex items-center gap-2">
-    <span v-if="autoGroupState?.status === 'downgraded'" class="badge badge-warning text-xs" :title="autoGroupState.at">
-      {{ t('admin.settings.openaiAutoGroup.downgraded') }}
-    </span>
-    <div v-else-if="autoGroupState?.status === 'failed'" role="alert" class="max-w-sm rounded border border-red-300 bg-red-50 p-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
-      {{ t('admin.settings.openaiAutoGroup.accountFailed', { name: account.name, id: account.id, reason: autoGroupState.message }) }}
+    <div v-if="autoGroupState" class="max-w-sm space-y-1 text-xs">
+      <div v-if="autoGroupState.status === 'failed'" role="alert" class="rounded border border-red-300 bg-red-50 p-2 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+        {{ t('admin.settings.openaiAutoGroup.accountFailed', { name: account.name, id: account.id, reason: autoGroupState.message }) }}
+      </div>
+      <span v-else class="badge badge-warning text-xs" :title="autoGroupState.message">
+        {{ t(`admin.settings.openaiAutoGroup.${autoGroupState.status}`) }}
+      </span>
+      <button v-if="autoGroupState.paused" type="button" class="ml-2 underline" :disabled="resuming" @click="resumeAutoGroup">{{ t('admin.settings.openaiAutoGroup.resume') }}</button>
+      <p v-if="resumeError" role="alert" class="text-red-700 dark:text-red-300">{{ resumeError }}</p>
+      <p v-if="autoGroupState.reason">{{ t('admin.settings.openaiAutoGroup.reasonLabel') }}: {{ t(`admin.settings.openaiAutoGroup.reason_${autoGroupState.reason}`) }}</p>
+      <p v-if="autoGroupState.request_count !== undefined">{{ t('admin.settings.openaiAutoGroup.failureProgress', { count: autoGroupState.failure_count, total: autoGroupState.request_count }) }}</p>
+      <p v-if="autoGroupState.sample_count">{{ t('admin.settings.openaiAutoGroup.slowProgress', { count: autoGroupState.slow_count, total: autoGroupState.sample_count }) }}</p>
+      <p v-if="autoGroupState.recovery_samples && (autoGroupState.status === 'downgraded' || autoGroupState.recovery_count)">{{ t('admin.settings.openaiAutoGroup.recoveryProgress', { count: autoGroupState.recovery_count ?? 0, total: autoGroupState.recovery_samples }) }}</p>
+      <p v-if="autoGroupState.protected_until">{{ t('admin.settings.openaiAutoGroup.protectedUntil', { time: formatDateTime(autoGroupState.protected_until) }) }}</p>
+      <p v-if="autoGroupState.cohort" class="break-all text-gray-500">{{ autoGroupCohort }}</p>
     </div>
     <!-- Rate Limit Display (429) - Two-line layout -->
     <div v-if="isRateLimited" class="flex flex-col items-center gap-1">
@@ -165,7 +175,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { adminAPI } from '@/api/admin'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import type { Account } from '@/types'
@@ -177,7 +189,32 @@ const props = defineProps<{
   account: Account
 }>()
 
-const autoGroupState = computed(() => props.account.platform === 'openai' ? props.account.extra?.openai_auto_group_state : undefined)
+const resumedAccount = ref<Account | null>(null)
+const resuming = ref(false)
+const resumeError = ref('')
+const autoGroupState = computed(() => props.account.platform === 'openai' ? (resumedAccount.value ?? props.account).extra?.openai_auto_group_state : undefined)
+const autoGroupCohort = computed(() => {
+  if (!autoGroupState.value?.cohort) return ''
+  try { return (JSON.parse(autoGroupState.value.cohort) as string[]).join(' · ') } catch { return autoGroupState.value.cohort }
+})
+watch(() => props.account, () => { resumedAccount.value = null; resumeError.value = '' })
+async function resumeAutoGroup() {
+  if (resuming.value) return
+  resuming.value = true
+  resumeError.value = ''
+  const { id, name } = props.account
+  try {
+    const account = await adminAPI.accounts.update(id, { extra: { openai_auto_group_resume: true } })
+    if (props.account.id !== id) return
+    resumedAccount.value = account
+  } catch (cause) {
+    if (props.account.id !== id) return
+    resumeError.value = t('admin.settings.openaiAutoGroup.resumeFailed', {
+      name, id,
+      reason: extractApiErrorMessage(cause, t('admin.settings.openaiAutoGroup.retryHint')),
+    })
+  } finally { resuming.value = false }
+}
 
 const emit = defineEmits<{
   (e: 'show-temp-unsched', account: Account): void
