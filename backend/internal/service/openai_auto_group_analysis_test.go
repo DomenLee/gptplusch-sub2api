@@ -289,7 +289,7 @@ func TestOpenAIAutoGroupTransportFailuresResetRecovery(t *testing.T) {
 			counter.history = OpenAIAutoGroupHistory{Version: p.Revision + ":low", Cohorts: map[string][]OpenAIAutoGroupSample{"model": {groupSample(1, "model", 1000)}}}
 			ctx, ginCtx := autoGroupTestRequest(2)
 			if timeout {
-				svc.newOpenAIFirstOutputTimeoutError(ctx, ginCtx, repo.current, nil, "", time.Now(), "model", "", time.Second, "headers", nil)
+				_ = svc.newOpenAIFirstOutputTimeoutError(ctx, ginCtx, repo.current, nil, "", time.Now(), "model", "", time.Second, "headers", nil)
 			} else {
 				_ = svc.handleOpenAIUpstreamTransportError(ctx, ginCtx, repo.current, errors.New("connection reset by peer"), false)
 			}

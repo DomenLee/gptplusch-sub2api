@@ -84,7 +84,7 @@ func (s *OpenAIGatewayService) beginOpenAIAutoGroup(ctx context.Context, account
 	if attempt == nil {
 		return func(*OpenAIForwardResult, error) {}
 	}
-	request := ctx.Value(openAIAutoGroupContextKey{}).(*openAIAutoGroupRequest)
+	request, _ := ctx.Value(openAIAutoGroupContextKey{}).(*openAIAutoGroupRequest)
 	start := time.Now()
 	request.mu.Lock()
 	if request.lastAccount == account.ID && !request.lastEnd.IsZero() {
@@ -133,7 +133,7 @@ func (s *OpenAIGatewayService) beginOpenAIAutoGroup(ctx context.Context, account
 func (s *OpenAIGatewayService) recordOpenAIAutoGroupSample(ctx context.Context, account *Account, attempt *openAIAutoGroupAttempt, sample OpenAIAutoGroupSample) {
 	attempt.mu.Lock()
 	defer attempt.mu.Unlock()
-	if attempt.sampled && !(sample.Success && !attempt.completed) && !(sample.Overload && !attempt.overloaded) && !(sample.Failed && !attempt.failed) {
+	if attempt.sampled && (!sample.Success || attempt.completed) && (!sample.Overload || attempt.overloaded) && (!sample.Failed || attempt.failed) {
 		return
 	}
 	// Preserve errors already seen for this request while attaching its final
@@ -219,7 +219,7 @@ func (s *OpenAIGatewayService) beginOpenAIAutoGroupWSTiming(ctx context.Context,
 	if attempt == nil {
 		return func() {}
 	}
-	request := ctx.Value(openAIAutoGroupContextKey{}).(*openAIAutoGroupRequest)
+	request, _ := ctx.Value(openAIAutoGroupContextKey{}).(*openAIAutoGroupRequest)
 	request.mu.Lock()
 	if !attempt.wsEnd.IsZero() {
 		attempt.wsPrior += start.Sub(attempt.wsEnd)
@@ -238,7 +238,7 @@ func (s *OpenAIGatewayService) openAIAutoGroupWSFirstToken(ctx context.Context, 
 	if attempt == nil {
 		return ms
 	}
-	request := ctx.Value(openAIAutoGroupContextKey{}).(*openAIAutoGroupRequest)
+	request, _ := ctx.Value(openAIAutoGroupContextKey{}).(*openAIAutoGroupRequest)
 	request.mu.Lock()
 	defer request.mu.Unlock()
 	return int(attempt.wsPrior.Milliseconds()) + ms
