@@ -7,9 +7,25 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
+	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
+
+// handleRequestBodyReadError handles cancellation and temporary capacity errors
+// before callers classify malformed or oversized request bodies.
+//
+// A read deadline on HTTP/1 also cancels the request context, so a body read
+// timeout is left to requestBodyReadFailure (408) instead of being reported as
+// a client that went away (499).
+func handleRequestBodyReadError(c *gin.Context, reqLog *zap.Logger, err error) bool {
+	if err != nil && !pkghttputil.IsRequestBodyReadTimeout(err) && failoverClientGone(c) {
+		logRequestBodyReadFailureDetails(reqLog, pkghttputil.DescribeRequestBodyReadFailure(c.Request, err))
+		c.Abort()
+		return true
+	}
+	return middleware2.RejectRequestBodyMemoryOverload(c, err)
+}
 
 func extractMaxBytesError(err error) (*http.MaxBytesError, bool) {
 	var maxErr *http.MaxBytesError
@@ -48,6 +64,9 @@ func RequestBodyClientErrorDetailsFrom(err error) RequestBodyClientErrorDetails 
 // stable, actionable client-facing error. The underlying error is intentionally
 // not exposed because it may contain implementation details or request data.
 func requestBodyClientError(err error) (status int, code, message string) {
+	if pkghttputil.IsRequestBodyReadTimeout(err) {
+		return http.StatusRequestTimeout, "request_body_timeout", "Timed out reading request body"
+	}
 	status = http.StatusBadRequest
 	diagnostic := pkghttputil.RequestBodyDiagnostics(err)
 

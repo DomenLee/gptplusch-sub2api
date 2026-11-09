@@ -174,7 +174,7 @@ func TestOpenAIAutoGroupRuntimeStateSurvivesStaleAccountEdits(t *testing.T) {
 		t.Run(fmt.Sprint(resume), func(t *testing.T) {
 			repo, mock := autoGroupRepository(t)
 			state := `{"generation":"fresh","paused":true,"protected_until":"2030-01-01T00:00:00Z","restore_bindings":[{"id":3,"priority":1}]}`
-			mock.ExpectQuery(`(?s)SELECT .*FOR NO KEY UPDATE`).WillReturnRows(sqlmock.NewRows(openCodeGoMergeMockColumns()).AddRow(true, false, true, nil, nil, nil, nil, nil, nil, false, nil, nil, state))
+			mock.ExpectQuery(`(?s)SELECT .*FOR NO KEY UPDATE`).WillReturnRows(sqlmock.NewRows(openCodeGoMergeMockColumns()).AddRow(true, false, true, nil, nil, nil, nil, nil, nil, false, nil, nil, state, nil, nil))
 			account := &service.Account{ID: 7, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Extra: map[string]any{service.OpenAIAutoGroupStateExtraKey: map[string]any{"generation": "stale"}, "openai_auto_group_resume": resume}}
 			extra, err := lockAndMergeAccountProbeExtra(context.Background(), repo.client, account, nil, nil)
 			require.NoError(t, err)
