@@ -1,6 +1,8 @@
 package service
 
 import (
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -126,6 +128,21 @@ func TestOpenAIResponsesOrphanPrecheckCompatibilityErrors(t *testing.T) {
 }
 
 func TestOpenAIResponsesOrphanPrecheckLargeEscapedContent(t *testing.T) {
+	const isolatedEnv = "SUB2API_TEST_ORPHAN_PRECHECK_ALLOC"
+	if os.Getenv(isolatedEnv) != "1" {
+		// AllocsPerRun reads process-wide counters, so background goroutines
+		// from other service tests must not contribute to this measurement.
+		binary, err := os.Executable()
+		require.NoError(t, err)
+		command := exec.CommandContext(t.Context(), binary,
+			"-test.run=^TestOpenAIResponsesOrphanPrecheckLargeEscapedContent$",
+			"-test.count=1", "-test.timeout=30s")
+		command.Env = append(os.Environ(), isolatedEnv+"=1")
+		output, err := command.CombinedOutput()
+		require.NoError(t, err, "isolated allocation check failed:\n%s", output)
+		return
+	}
+
 	body := []byte(`{"vendor":"` + strings.Repeat(`\n\"`, 1<<16) + `","input":[{"content":"` + strings.Repeat(`\n\"`, 1<<16) + `","type":"message"}]}`)
 	require.False(t, openAIResponsesInputMayNeedOrphanCleanup(body))
 	allocations := testing.AllocsPerRun(5, func() {
