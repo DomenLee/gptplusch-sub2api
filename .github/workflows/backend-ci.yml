@@ -98,10 +98,28 @@ jobs:
       - name: Verify Go version
         run: |
           go version | grep -q 'go1.27.3'
+      - name: Install verified golangci-lint release through GitHub API
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GOLANGCI_LINT_VERSION: 2.14.0
+        run: |
+          set -Eeuo pipefail
+          install_dir="${RUNNER_TEMP}/golangci-lint"
+          archive="golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64.tar.gz"
+          checksums="golangci-lint-${GOLANGCI_LINT_VERSION}-checksums.txt"
+          mkdir -p "${install_dir}"
+          gh release download "v${GOLANGCI_LINT_VERSION}" \
+            --repo golangci/golangci-lint \
+            --pattern "${archive}" --pattern "${checksums}" --dir "${install_dir}"
+          cd "${install_dir}"
+          awk -v archive="${archive}" '$2 == archive { print }' "${checksums}" \
+            | sha256sum --check --strict -
+          tar -xzf "${archive}"
+          echo "${install_dir}/golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64" >> "${GITHUB_PATH}"
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.14.0
+          install-mode: none
           args: --timeout=30m
           working-directory: backend
 
