@@ -2,16 +2,18 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"errors"
-	"io"
-	"net/http"
-	"net/http/httptest"
-	"testing"
-
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"testing"
 )
 
 func TestRequestBodyLimitTooLarge(t *testing.T) {
@@ -91,6 +93,51 @@ func TestRequestBodyClientErrorDetails(t *testing.T) {
 			require.Equal(t, tt.status, details.Status)
 			require.Equal(t, tt.code, details.Code)
 			require.Contains(t, details.Message, tt.wantInBody)
+		})
+	}
+}
+
+func TestHandleRequestBodyReadErrorCancellation(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		cancelled bool
+		committed bool
+		readErr   error
+		handled   bool
+	}{
+		{name: "cancelled", cancelled: true, handled: true},
+		{name: "cancelled_after_commit", cancelled: true, committed: true, handled: true},
+		{name: "ordinary_read_error"},
+		// An HTTP/1 read deadline also cancels the request context; the
+		// timeout must reach requestBodyReadFailure (408).
+		{name: "read_timeout_with_cancelled_context", cancelled: true, readErr: &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.cancelled {
+				cancel()
+			}
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(ctx)
+			if tc.committed {
+				_, err := c.Writer.WriteString("already committed")
+				require.NoError(t, err)
+			}
+			bodyBefore := recorder.Body.String()
+			readErr := tc.readErr
+			if readErr == nil {
+				readErr = io.ErrUnexpectedEOF
+			}
+			require.Equal(t, tc.handled, handleRequestBodyReadError(c, nil, readErr))
+			require.Equal(t, tc.handled, c.IsAborted())
+			status := http.StatusOK
+			if tc.handled && !tc.committed {
+				status = statusClientClosedRequest
+			}
+			require.Equal(t, status, c.Writer.Status())
+			require.Equal(t, bodyBefore, recorder.Body.String(), "cancelled clients must not receive an error body")
 		})
 	}
 }

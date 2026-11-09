@@ -42,6 +42,9 @@ func (h *OpenAIGatewayHandler) ResponsesInputTokens(c *gin.Context) {
 
 	body, err := readLenientJSONRequestBodyWithDiagnostics(c, h.cfg, reqLog)
 	if err != nil {
+		if handleRequestBodyReadError(c, reqLog, err) {
+			return
+		}
 		h.requestBodyErrorResponse(c, err)
 		return
 	}
@@ -131,6 +134,10 @@ func (h *OpenAIGatewayHandler) ResponsesInputTokens(c *gin.Context) {
 func (h *OpenAIGatewayHandler) GrokCountTokens(c *gin.Context) {
 	body, err := readLenientJSONRequestBodyWithDiagnostics(c, h.cfg, nil)
 	if err != nil {
+		bodyLog := requestLogger(c, "handler.openai_gateway.grok_count_tokens")
+		if handleRequestBodyReadError(c, bodyLog, err) {
+			return
+		}
 		h.requestBodyAnthropicErrorResponse(c, err)
 		return
 	}
@@ -197,6 +204,9 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 
 	body, err := readLenientJSONRequestBodyWithDiagnostics(c, h.cfg, reqLog)
 	if err != nil {
+		if handleRequestBodyReadError(c, reqLog, err) {
+			return
+		}
 		h.requestBodyAnthropicErrorResponse(c, err)
 		return
 	}

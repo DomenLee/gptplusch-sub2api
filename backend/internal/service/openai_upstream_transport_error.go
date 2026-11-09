@@ -177,7 +177,7 @@ func (s *OpenAIGatewayService) tempUnscheduleOpenAITransportError(ctx context.Co
 	if s == nil || account == nil {
 		return
 	}
-	if account.IsTempUnschedulableDisabled() {
+	if account.IsTempUnschedulableDisabled() || (s.cfg != nil && s.cfg.Gateway.DisableOpenAITransportErrorCooldown) {
 		return
 	}
 	until := time.Now().Add(openAITransportErrorTempUnschedDuration)

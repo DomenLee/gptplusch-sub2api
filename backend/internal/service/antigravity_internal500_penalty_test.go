@@ -319,3 +319,16 @@ func TestResetInternal500Counter(t *testing.T) {
 		require.Equal(t, int64(99), cache.resetCalls[0])
 	})
 }
+
+func TestInternal500ImageCooldownRespectsDisabledScheduling(t *testing.T) {
+	account := &Account{
+		ID:          1,
+		Credentials: map[string]any{"temp_unschedulable_disabled": true},
+	}
+	// No repository/cache should be touched when temporary scheduling is disabled.
+	svc := &AntigravityGatewayService{}
+	require.NotPanics(t, func() {
+		svc.handleInternal500ForModel(context.Background(), "[test]", account, "gemini-3-pro-image")
+		svc.handleInternal500ForModel(context.Background(), "[test]", nil, "gemini-3-pro-image")
+	})
+}
