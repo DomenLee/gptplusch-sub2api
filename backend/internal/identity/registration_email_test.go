@@ -33,7 +33,7 @@ func TestUnifiedStoreRegistrationEmailDoesNotAffectOtherCodes(t *testing.T) {
 		t.Run(in.Site+"/"+in.Purpose, func(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 			reachedRate := errors.New("original send path reached")
 			mock.ExpectQuery("INSERT INTO unified_attempts").WillReturnError(reachedRate)
 			s := &Service{DB: db, CheckRegistrationEmail: func(context.Context, string) error {
@@ -53,7 +53,7 @@ func TestUnifiedStoreRegistrationEmailRecheckedBeforeCreate(t *testing.T) {
 		t.Run(state, func(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 			blocked := errors.New("email type rejected after code was issued")
 			calls := 0
 			s := &Service{DB: db, Key: "local-only-test-key", Alias: func(email string) string { return email },

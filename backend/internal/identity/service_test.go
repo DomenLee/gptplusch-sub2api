@@ -55,7 +55,7 @@ func TestUnifiedOriginalResetUsesEmailProofAndOnlyRevokesAISessions(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 			s := &Service{DB: db, Key: "isolated-test-key"}
 			id := "123e4567-e89b-12d3-a456-426614174000"
 			email := "user@example.test"
