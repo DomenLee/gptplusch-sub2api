@@ -1,4 +1,4 @@
-# 通用账号改造（本地测试分支）
+# 双站共用账号凭据（独立会话）
 
 本项目为商城与 AI 站提供共同的邮箱/密码凭据。两站登录时效、会话、JWT/刷新令牌、角色和业务资产独立。详细需求在商城项目 `docs/account-unification-requirements.md`；测试记录在 `docs/account-unification-local-test.md`。
 
@@ -20,15 +20,15 @@
 
 ## 数据库变更
 
-**新增迁移：`backend/migrations/247_unified_accounts.sql`、`backend/migrations/248_unified_account_operations.sql`。** 适用于 PostgreSQL，由现有启动迁移器按文件名顺序执行。`247` 新增统一账号、站点映射、验证码、限流与审计结构；`248` 新增跨站改密/找回/换邮箱请求的幂等状态表。旧用户/余额/订单表不做批量合并或资产迁移。
+**新增迁移：`backend/migrations/250_unified_accounts.sql`、`backend/migrations/251_unified_account_operations.sql`。** 适用于 PostgreSQL，由现有启动迁移器按文件名顺序执行，接续主线已有的 `247`、`248` 和 `249`。`250` 新增统一账号、站点映射、验证码、限流与审计结构；`251` 新增跨站改密/找回/换邮箱请求的幂等状态表。旧用户/余额/订单表不做批量合并或资产迁移。
 
-正式执行前备份数据库与配置；先迁移 AI，再迁移商城，确认两站代码及服务间配置后启用开关。`247` 基础迁移曾在专用本地测试库执行；`248` 尚未执行，生产库未操作。迁移检查包括统一邮箱/别名唯一、每站一个本地账号对应一个统一身份、验证码和会话版本隔离。
+正式执行前备份数据库与配置；先迁移 AI，再迁移商城，确认两站代码及服务间配置后启用开关。迁移结构曾在专用本地测试库验证；生产库未操作。迁移检查包括统一邮箱/别名唯一、每站一个本地账号对应一个统一身份、验证码和会话版本隔离。
 
 未关联任何账号时可以关开关并保留新增结构；一旦关联，不可直接恢复旧凭据或删除映射。回退应保留兼容代码，或经确认后在维护窗口协调恢复两站一致备份。
 
 ## 本地验证
 
-工作分支 `codex/account-unification-test`，目录 `/Users/lifengdem1pro/Documents/students/gptplusch-sub2api-account-test`。未提交、未推送、未部署。
+开发阶段测试工作区为 `/Users/lifengdem1pro/Documents/students/gptplusch-sub2api-account-test`；该路径仅用于追溯本地验证环境，不代表当前主线或生产版本。
 
 前端：`pnpm run build` 和现有认证/个人设置 Vitest。后端：`CGO_ENABLED=0 GOMAXPROCS=4 go build -o /tmp/gptplusch-account-ai-final ./cmd/server`，以及认证相关 service/repository/handler 测试。`internal/service/unified_account_test.go` 覆盖商城占用检查成功、冲突、错误响应和安全配置。
 
