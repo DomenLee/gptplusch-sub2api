@@ -13,13 +13,16 @@ import (
 const (
 	TaskTypeVerifyCode    = "verify_code"
 	TaskTypePasswordReset = "password_reset"
+	TaskTypeAccountNotice = "account_notice"
 )
 
 // EmailTask 邮件发送任务
 type EmailTask struct {
+	Subject  string
+	Body     string
 	Email    string
 	SiteName string
-	TaskType string // "verify_code" or "password_reset"
+	TaskType string // verification, password reset, or account security notice
 	ResetURL string // Only used for password_reset task type
 	Locale   string // Optional Accept-Language locale hint
 }
@@ -82,6 +85,10 @@ func (s *EmailQueueService) processTask(workerID int, task EmailTask) {
 	defer cancel()
 
 	switch task.TaskType {
+	case TaskTypeAccountNotice:
+		if err := s.emailService.SendEmail(ctx, task.Email, task.Subject, task.Body); err != nil {
+			logger.LegacyPrintf("service.email_queue", "[EmailQueue] Account notice delivery failed: %v", err)
+		}
 	case TaskTypeVerifyCode:
 		if err := s.emailService.SendVerifyCode(ctx, task.Email, task.SiteName, task.Locale); err != nil {
 			logger.LegacyPrintf("service.email_queue", "[EmailQueue] Worker %d failed to send verify code to %s: %v", workerID, task.Email, err)
@@ -141,4 +148,14 @@ func (s *EmailQueueService) Stop() {
 	close(s.stopChan)
 	s.wg.Wait()
 	logger.LegacyPrintf("service.email_queue", "%s", "[EmailQueue] All workers stopped")
+}
+
+// EnqueueAccountNotice reuses the bounded queue and its shutdown lifecycle.
+func (s *EmailQueueService) EnqueueAccountNotice(email, subject, body string) error {
+	select {
+	case s.taskChan <- EmailTask{Email: email, TaskType: TaskTypeAccountNotice, Subject: subject, Body: body}:
+		return nil
+	default:
+		return fmt.Errorf("email queue is full")
+	}
 }

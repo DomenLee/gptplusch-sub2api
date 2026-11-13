@@ -22,6 +22,7 @@ func RegisterAuthRoutes(
 	settingService *service.SettingService,
 	panelRateLimiter *servermiddleware.PanelRateLimiter,
 ) {
+	h.Auth.RegisterUnifiedRoutes(v1, gin.HandlerFunc(jwtAuth))
 	// 创建速率限制器
 	rateLimiter := middleware.NewRateLimiter(redisClient)
 

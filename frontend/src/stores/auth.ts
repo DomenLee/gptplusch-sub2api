@@ -508,6 +508,7 @@ export const useAuthStore = defineStore('auth', () => {
     register,
     setToken,
     logout,
+    clearSession: clearAuth,
     checkAuth,
     refreshUser,
     setPendingAuthSession,

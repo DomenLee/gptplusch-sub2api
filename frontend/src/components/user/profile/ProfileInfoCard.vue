@@ -137,6 +137,7 @@
           class="card border border-gray-100 bg-white/90 p-6 dark:border-dark-700 dark:bg-dark-900/50"
         >
           <ProfileIdentityBindingsSection
+            :unified-linked="unifiedLinked"
             :user="user"
             :linuxdo-enabled="linuxdoEnabled"
             :dingtalk-enabled="dingtalkEnabled"
@@ -190,6 +191,7 @@ import type { User, UserAuthBindingStatus, UserAuthProvider, UserProfileSourceCo
 
 const props = withDefaults(defineProps<{
   user: User | null
+  unifiedLinked?: boolean
   linuxdoEnabled?: boolean
   dingtalkEnabled?: boolean
   oidcEnabled?: boolean

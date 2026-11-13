@@ -219,6 +219,7 @@ type BindableProvider = Exclude<UserAuthProvider, 'email'>
 const props = withDefaults(
   defineProps<{
     user: User | null
+    unifiedLinked?: boolean
     linuxdoEnabled?: boolean
     dingtalkEnabled?: boolean
     oidcEnabled?: boolean
@@ -559,6 +560,7 @@ function hasBindingDetails(
 }
 
 function toggleEmailForm(): void {
+  if (props.unifiedLinked) { document.getElementById('unified-account-security')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); return }
   isEmailFormExpanded.value = !isEmailFormExpanded.value
 }
 

@@ -223,6 +223,8 @@ const isSendingCode = ref<boolean>(false)
 const errorMessage = ref<string>('')
 const codeSent = ref<boolean>(false)
 const verifyCode = ref<string>('')
+const challengeId = ref('')
+const requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
 const countdown = ref<number>(0)
 let countdownTimer: ReturnType<typeof setInterval> | null = null
 
@@ -579,7 +581,8 @@ async function sendCode(): Promise<void> {
     }
 
     codeSent.value = true
-    startCountdown(response.countdown)
+    challengeId.value = response.challengeId || ''
+    startCountdown(response.retryAfter || response.countdown)
 
     showResendTurnstile.value = false
   } catch (error: unknown) {
@@ -724,6 +727,7 @@ async function handleVerify(): Promise<void> {
         email: email.value,
         password: password.value,
         verify_code: verifyCode.value.trim(),
+        ...(challengeId.value ? { challenge_id: challengeId.value, request_id: requestId } : {}),
         turnstile_token:
           turnstileEnabled.value || aliyunCaptchaEnabled.value
             ? initialTurnstileToken.value || undefined

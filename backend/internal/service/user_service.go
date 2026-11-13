@@ -511,8 +511,12 @@ func (s *UserService) updateProfile(ctx context.Context, userID int64, req Updat
 	// 否则并发的扣费与状态变更会被这份快照回滚。
 	var fields UserUpdateFields
 
+	// Linked credentials can only be changed using the common proof-based endpoints.
+	if req.Email != nil && user.UnifiedID != "" && *req.Email != user.Email {
+		return nil, oldConcurrency, ErrUnifiedSettings
+	}
 	// 更新字段
-	if req.Email != nil {
+	if req.Email != nil && user.UnifiedID == "" {
 		// 检查新邮箱是否已被使用
 		exists, err := s.userRepo.ExistsByEmail(ctx, *req.Email)
 		if err != nil {
@@ -722,6 +726,15 @@ func (s *UserService) buildEmailIdentitySummary(user *User, records []UserAuthId
 		return summary
 	}
 
+	if user.UnifiedID != "" {
+		summary.Bound = true
+		summary.BoundCount = 1
+		summary.DisplayName = user.Email
+		summary.SubjectHint = maskEmailIdentity(user.Email)
+		summary.NoteKey = ""
+		summary.Note = "邮箱和密码在通用账号安全中管理。"
+		return summary
+	}
 	filtered := filterUserAuthIdentities(records, "email")
 	if len(filtered) > 0 {
 		primary := selectPrimaryUserAuthIdentity(filtered)
@@ -1030,6 +1043,9 @@ func (s *UserService) ChangePassword(ctx context.Context, userID int64, req Chan
 		return fmt.Errorf("get user: %w", err)
 	}
 
+	if user.UnifiedID != "" {
+		return ErrUnifiedSettings
+	}
 	// 验证当前密码
 	if !user.CheckPassword(req.CurrentPassword) {
 		return ErrPasswordIncorrect

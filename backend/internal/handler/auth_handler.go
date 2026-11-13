@@ -48,6 +48,8 @@ func NewAuthHandler(cfg *config.Config, authService *service.AuthService, userSe
 
 // RegisterRequest represents the registration request payload
 type RegisterRequest struct {
+	ChallengeID           string `json:"challenge_id"`
+	RequestID             string `json:"request_id"`
 	Email                 string `json:"email" binding:"required,email"`
 	Password              string `json:"password" binding:"required,min=6"`
 	VerifyCode            string `json:"verify_code"`
@@ -75,6 +77,7 @@ type SendVerifyCodeResponse struct {
 
 // LoginRequest represents the login request payload
 type LoginRequest struct {
+	InvitationCode        string `json:"invitation_code"`
 	Email                 string `json:"email" binding:"required,email"`
 	Password              string `json:"password" binding:"required"`
 	TurnstileToken        string `json:"turnstile_token"`
@@ -190,6 +193,10 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
+	if h.authService.Unified != nil {
+		h.registerUnified(c, req)
+		return
+	}
 	_, user, err := h.authService.RegisterWithVerification(
 		c.Request.Context(),
 		req.Email,
@@ -222,6 +229,10 @@ func (h *AuthHandler) SendVerifyCode(c *gin.Context) {
 		return
 	}
 
+	if h.authService.Unified != nil {
+		h.sendUnifiedRegisterCode(c, req.Email)
+		return
+	}
 	result, err := h.authService.SendVerifyCodeAsync(c.Request.Context(), req.Email, c.GetHeader("Accept-Language"))
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -249,7 +260,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	token, user, err := h.authService.Login(c.Request.Context(), req.Email, req.Password)
+	token, user, err := h.authService.Login(c.Request.Context(), req.Email, req.Password, req.InvitationCode)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

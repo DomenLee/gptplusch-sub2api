@@ -224,7 +224,10 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	// 避免这份快照回滚并发的扣费、状态变更或批量限额调整。
 	var fields UserUpdateFields
 
-	if input.Email != "" {
+	if user.UnifiedID != "" && (input.Email != "" && input.Email != user.Email || input.Password != "") {
+		return nil, ErrUnifiedSettings
+	}
+	if input.Email != "" && user.UnifiedID == "" {
 		user.Email = input.Email
 		fields.Email = true
 	}

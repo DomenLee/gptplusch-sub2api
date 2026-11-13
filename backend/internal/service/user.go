@@ -7,6 +7,8 @@ import (
 )
 
 type User struct {
+	UnifiedID      string            `json:"-"`
+	VerifyPassword func(string) bool `json:"-"`
 	ID             int64
 	Email          string
 	Username       string
@@ -100,6 +102,9 @@ func (u *User) CanBindGroup(groupID int64, isExclusive bool) bool {
 }
 
 func (u *User) SetPassword(password string) error {
+	if u.UnifiedID != "" {
+		return ErrUnifiedSettings
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return err
@@ -109,5 +114,8 @@ func (u *User) SetPassword(password string) error {
 }
 
 func (u *User) CheckPassword(password string) bool {
+	if u.VerifyPassword != nil {
+		return u.VerifyPassword(password)
+	}
 	return bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) == nil
 }

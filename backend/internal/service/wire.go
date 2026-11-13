@@ -56,6 +56,7 @@ func ProvideEmailQueueService(emailService *EmailService) *EmailQueueService {
 // ProvideAuthService wires the optional captcha providers into AuthService while
 // keeping NewAuthService's public constructor compatible with existing tests.
 func ProvideAuthService(
+	sqlDB *sql.DB,
 	entClient *dbent.Client,
 	userRepo UserRepository,
 	redeemRepo RedeemCodeRepository,
@@ -88,6 +89,7 @@ func ProvideAuthService(
 		affiliateService,
 		userPlatformQuotaRepo,
 	)
+	svc.ConfigureUnified(sqlDB)
 	svc.SetTencentCaptchaService(tencentCaptchaService)
 	svc.SetAliyunCaptchaService(aliyunCaptchaService)
 	if mcpOAuthService != nil {
