@@ -103,6 +103,15 @@ function mountEmailBindingSection(user: User | null) {
 }
 
 describe('ProfileIdentityBindingsSection', () => {
+  it('keeps the original first-email form for an OAuth-only user when shared accounts are enabled', () => {
+    const wrapper = mount(ProfileIdentityBindingsSection, {
+      props: { user: createUser({ email: 'oauth-user@oidc-connect.invalid' }), unifiedEnabled: true },
+      global: { plugins: [pinia], stubs: { Icon: true, AccountSecurity: true } }
+    })
+    expect(wrapper.find('[data-testid="profile-binding-email-form"]').exists()).toBe(true)
+    expect(wrapper.find('account-security-stub').exists()).toBe(false)
+    wrapper.unmount()
+  })
   beforeEach(() => {
     pinia = createPinia()
     setActivePinia(pinia)

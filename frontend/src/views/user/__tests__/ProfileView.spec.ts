@@ -29,6 +29,11 @@ vi.mock('@/utils/format', () => ({
   formatDate: () => 'April 2026'
 }))
 
+vi.mock('@/api/account', () => ({
+  getAccountConfig: vi.fn().mockResolvedValue({ enabled: true }),
+  getAccountState: vi.fn().mockResolvedValue({ account: { id: 'shared-id', email: 'alice@example.com', version: 1 }, requiresMfa: false })
+}))
+
 vi.mock('vue-i18n', async (importOriginal) => {
   const actual = await importOriginal<typeof import('vue-i18n')>()
   return {

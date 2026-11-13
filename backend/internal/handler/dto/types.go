@@ -41,6 +41,7 @@ type User struct {
 // AdminUser 是管理员接口使用的 user DTO（包含敏感/内部字段）。
 // 注意：普通用户接口不得返回 notes 等管理员备注信息。
 type AdminUser struct {
+	SharedCredentials bool `json:"shared_credentials"`
 	User
 
 	Notes      string     `json:"notes"`

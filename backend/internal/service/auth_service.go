@@ -1549,13 +1549,13 @@ func (s *AuthService) RefreshToken(ctx context.Context, oldTokenString string) (
 }
 
 // IsPasswordResetEnabled 检查是否启用密码重置功能
-// 要求：必须同时开启邮件验证且 SMTP 配置正确
+// 共用账号强制验证邮箱；旧账号仍遵循原邮件验证开关。
 func (s *AuthService) IsPasswordResetEnabled(ctx context.Context) bool {
 	if s.settingService == nil {
 		return false
 	}
-	// Must have email verification enabled and SMTP configured
-	if !s.settingService.IsEmailVerifyEnabled(ctx) {
+	// Keep the existing reset feature flag for both account types.
+	if s.Unified == nil && !s.settingService.IsEmailVerifyEnabled(ctx) {
 		return false
 	}
 	return s.settingService.IsPasswordResetEnabled(ctx)
@@ -1568,17 +1568,25 @@ func (s *AuthService) preparePasswordReset(ctx context.Context, email, frontendB
 	// Check if user exists (but don't reveal this to the caller)
 	user, err := s.userRepo.GetByEmail(ctx, email)
 	if err != nil {
-		if errors.Is(err, ErrUserNotFound) {
+		if errors.Is(err, ErrUserNotFound) && s.Unified != nil {
+			account, lookupErr := s.Unified.Lookup(ctx, email)
+			if lookupErr != nil || account == nil {
+				return "", "", false
+			}
+			// A store-only account may recover its credential here without
+			// creating an AI business user, rewards, or invitation records.
+		} else if errors.Is(err, ErrUserNotFound) {
 			// Security: Log but don't reveal that user doesn't exist
 			logger.LegacyPrintf("service.auth", "[Auth] Password reset requested for non-existent email: %s", email)
 			return "", "", false
+		} else {
+			logger.LegacyPrintf("service.auth", "[Auth] Database error checking email for password reset: %v", err)
+			return "", "", false
 		}
-		logger.LegacyPrintf("service.auth", "[Auth] Database error checking email for password reset: %v", err)
-		return "", "", false
 	}
 
 	// Check if user is active
-	if !user.IsActive() {
+	if user != nil && !user.IsActive() {
 		logger.LegacyPrintf("service.auth", "[Auth] Password reset requested for inactive user: %s", email)
 		return "", "", false
 	}
@@ -1655,28 +1663,46 @@ func (s *AuthService) ResetPassword(ctx context.Context, email, token, newPasswo
 		return ErrServiceUnavailable
 	}
 
+	user, err := s.userRepo.GetByEmail(ctx, email)
+	if err != nil && !errors.Is(err, ErrUserNotFound) {
+		return ErrServiceUnavailable
+	}
+	var common *identity.Account
+	if s.Unified != nil && (user == nil || user.UnifiedID != "") {
+		if common, err = s.Unified.Lookup(ctx, email); err != nil {
+			return UnifiedError(err)
+		} else if common != nil {
+			if err := identity.Password(newPassword); err != nil {
+				return UnifiedError(err)
+			}
+		}
+	}
+	if user == nil && common == nil {
+		return ErrInvalidResetToken
+	}
+	if user != nil && !user.IsActive() {
+		return ErrUserNotActive
+	}
+	if user != nil && user.UnifiedID != "" && (common == nil || common.ID != user.UnifiedID) {
+		return ErrServiceUnavailable
+	}
 	// Verify and consume the reset token (one-time use)
 	if err := s.emailService.ConsumePasswordResetToken(ctx, email, token); err != nil {
 		return err
 	}
 
-	// Get user
-	user, err := s.userRepo.GetByEmail(ctx, email)
-	if err != nil {
-		if errors.Is(err, ErrUserNotFound) {
-			return ErrInvalidResetToken // Token was valid but user was deleted
+	if common != nil {
+		if _, err := s.Unified.ResetVerifiedPassword(ctx, common.Email, newPassword); err != nil {
+			return UnifiedError(err)
 		}
-		logger.LegacyPrintf("service.auth", "[Auth] Database error getting user for password reset: %v", err)
-		return ErrServiceUnavailable
-	}
-
-	// Check if user is active
-	if !user.IsActive() {
-		return ErrUserNotActive
-	}
-
-	if user.UnifiedID != "" {
-		return infraerrors.BadRequest("USE_UNIFIED_RECOVERY", "请使用通用账号的邮箱验证码找回密码")
+		if user != nil {
+			// The identity transaction already invalidated AI access tokens.
+			// A cache failure must not turn a completed reset into a false failure.
+			if err := s.RevokeAllUserSessions(ctx, user.ID); err != nil {
+				logger.LegacyPrintf("service.auth", "[Auth] Failed to revoke refresh tokens for user %d: %v", user.ID, err)
+			}
+		}
+		return nil
 	}
 	// Hash new password
 	hashedPassword, err := s.HashPassword(newPassword)

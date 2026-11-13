@@ -6,7 +6,9 @@
     >
       <ProfileInfoCard
         v-if="user"
-        :unified-linked="unifiedLinked"
+        :unified-linked="!!accountState?.account"
+        :unified-enabled="unifiedEnabled"
+        @account-updated="refreshAccount"
         :user="user"
         :linuxdo-enabled="linuxdoOAuthEnabled"
         :dingtalk-enabled="dingtalkOAuthEnabled"
@@ -34,8 +36,7 @@
         </div>
       </div>
 
-      <AccountSecurity @linked="unifiedLinked = $event" />
-      <ProfilePasswordForm v-if="user && !unifiedLinked" />
+      <ProfilePasswordForm v-if="user" :unified-account="accountState?.account" :requires-mfa="accountState?.requiresMfa" />
 
       <ProfileBalanceNotifyCard
         v-if="user && balanceLowNotifyEnabled"
@@ -59,7 +60,7 @@ import { Icon } from '@/components/icons'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import ProfileBalanceNotifyCard from '@/components/user/profile/ProfileBalanceNotifyCard.vue'
 import ProfileInfoCard from '@/components/user/profile/ProfileInfoCard.vue'
-import AccountSecurity from '@/components/AccountSecurity.vue'
+import { getAccountConfig, getAccountState, type AccountState } from '@/api/account'
 import ProfilePasswordForm from '@/components/user/profile/ProfilePasswordForm.vue'
 import ProfileTotpCard from '@/components/user/profile/ProfileTotpCard.vue'
 import ProfilePasskeyCard from '@/components/user/profile/ProfilePasskeyCard.vue'
@@ -70,7 +71,14 @@ import { useAuthStore } from '@/stores/auth'
 const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
-const unifiedLinked = ref(false)
+const unifiedEnabled = ref(false)
+const accountState = ref<AccountState | null>(null)
+async function refreshAccount() {
+  try {
+    unifiedEnabled.value = (await getAccountConfig()).enabled
+    if (unifiedEnabled.value) accountState.value = await getAccountState()
+  } catch { appStore.showError?.('账号信息读取失败，请刷新后重试。') }
+}
 const user = computed(() => authStore.user)
 
 const contactInfo = ref('')
@@ -116,5 +124,6 @@ onMounted(async () => {
     })
 
   await Promise.all([profileRefresh, settingsLoad])
+  if (user.value) await refreshAccount()
 })
 </script>

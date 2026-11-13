@@ -732,7 +732,7 @@ func (s *UserService) buildEmailIdentitySummary(user *User, records []UserAuthId
 		summary.DisplayName = user.Email
 		summary.SubjectHint = maskEmailIdentity(user.Email)
 		summary.NoteKey = ""
-		summary.Note = "邮箱和密码在通用账号安全中管理。"
+		summary.Note = "邮箱和密码在个人设置中管理。"
 		return summary
 	}
 	filtered := filterUserAuthIdentities(records, "email")

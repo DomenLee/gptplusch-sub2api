@@ -37,6 +37,15 @@ func (s *AuthService) BindEmailIdentity(
 	if strings.TrimSpace(password) == "" {
 		return nil, ErrPasswordRequired
 	}
+	currentUser, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	// Old clients must be directed to the existing email settings before their
+	// one-time code is consumed. Shared email changes require both mailboxes.
+	if currentUser.UnifiedID != "" {
+		return nil, ErrUnifiedSettings
+	}
 	if err := s.VerifyOAuthEmailCode(ctx, normalizedEmail, verifyCode); err != nil {
 		return nil, err
 	}
@@ -44,16 +53,9 @@ func (s *AuthService) BindEmailIdentity(
 		return nil, err
 	}
 
-	currentUser, err := s.userRepo.GetByID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
 	firstRealEmailBind := !hasBindableEmailIdentitySubject(currentUser.Email)
 	if firstRealEmailBind && len(password) < 6 {
 		return nil, infraerrors.BadRequest("PASSWORD_TOO_SHORT", "password must be at least 6 characters")
-	}
-	if currentUser.UnifiedID != "" {
-		return nil, ErrUnifiedSettings
 	}
 	if !firstRealEmailBind && !currentUser.CheckPassword(password) {
 		return nil, ErrPasswordIncorrect
@@ -120,6 +122,9 @@ func (s *AuthService) SendEmailIdentityBindCode(ctx context.Context, userID int6
 			return ErrUserNotFound
 		}
 		return ErrServiceUnavailable
+	}
+	if currentUser.UnifiedID != "" {
+		return ErrUnifiedSettings
 	}
 
 	if err := s.ensureEmailIdentityAvailableForUser(ctx, currentUser, normalizedEmail); err != nil {

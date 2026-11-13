@@ -1,12 +1,17 @@
-import { mount } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ProfilePasswordForm from '@/components/user/profile/ProfilePasswordForm.vue'
 
-const { changePasswordMock, showSuccessMock, showErrorMock } = vi.hoisted(() => ({
+const { changePasswordMock, showSuccessMock, showErrorMock, clearSessionMock, pushMock } = vi.hoisted(() => ({
   changePasswordMock: vi.fn(),
   showSuccessMock: vi.fn(),
-  showErrorMock: vi.fn()
+  showErrorMock: vi.fn(),
+  clearSessionMock: vi.fn(),
+  pushMock: vi.fn()
 }))
+
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: pushMock }) }))
+vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ clearSession: clearSessionMock }) }))
 
 vi.mock('@/api', () => ({
   userAPI: {
@@ -47,6 +52,40 @@ vi.mock('vue-i18n', async (importOriginal) => {
 })
 
 describe('ProfilePasswordForm', () => {
+  beforeEach(() => { vi.resetAllMocks() })
+  const shared = { id: 'shared-id', email: 'user@example.test', version: 2 }
+
+  it.each(['12345678901', '😀'.repeat(6), '密'.repeat(25)])('retains shared password length validation for %s', async (password) => {
+    const wrapper = mount(ProfilePasswordForm, { props: { unifiedAccount: shared } })
+    await wrapper.get('#old_password').setValue('CurrentPassword2026')
+    await wrapper.get('#new_password').setValue(password)
+    await wrapper.get('#confirm_password').setValue(password)
+    await wrapper.get('form').trigger('submit')
+    expect(changePasswordMock).not.toHaveBeenCalled()
+    expect(showErrorMock).toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('reuses the original endpoint with MFA and a stable request on retry, then exits only this site', async () => {
+    changePasswordMock.mockRejectedValueOnce({ message: '暂未确认，请重试' }).mockResolvedValueOnce({ reauthenticate: true })
+    const wrapper = mount(ProfilePasswordForm, { props: { unifiedAccount: shared, requiresMfa: true } })
+    await wrapper.get('#old_password').setValue('CurrentPassword2026')
+    await wrapper.get('#new_password').setValue('ChangedPassword2026')
+    await wrapper.get('#confirm_password').setValue('ChangedPassword2026')
+    await wrapper.get('#password_totp').setValue('123456')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    const proof = changePasswordMock.mock.calls[0][2]
+    expect(proof).toMatchObject({ credential_version: 2, totp_code: '123456' })
+    expect(proof.request_id.length).toBeGreaterThanOrEqual(16)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(changePasswordMock.mock.calls[1][2]).toEqual(proof)
+    expect(clearSessionMock).toHaveBeenCalledOnce()
+    expect(pushMock).toHaveBeenCalledWith('/login')
+    wrapper.unmount()
+  })
+
   it('shows validation failures as toast messages instead of inline errors', async () => {
     const wrapper = mount(ProfilePasswordForm)
 

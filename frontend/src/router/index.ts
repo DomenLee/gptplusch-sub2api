@@ -18,7 +18,7 @@ import { resolveRouteDocumentTitle } from './title'
  * Route definitions with lazy loading
  */
 const routes: RouteRecordRaw[] = [
-  { path: '/recover-account', component: () => import('@/views/auth/RecoverAccount.vue'), meta: { requiresAuth: false, title: '找回通用密码' } },
+  { path: '/recover-account', redirect: '/forgot-password' },
   // ==================== Setup Routes ====================
   {
     path: '/setup',

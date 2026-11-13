@@ -20,7 +20,7 @@ import (
 	"github.com/google/uuid"
 )
 
-var ErrUnifiedSettings = infraerrors.BadRequest("USE_UNIFIED_SETTINGS", "该账号已升级，请在通用账号设置中修改邮箱或密码；忘记密码可通过邮箱验证码找回")
+var ErrUnifiedSettings = infraerrors.BadRequest("USE_UNIFIED_SETTINGS", "请在个人设置中修改邮箱或密码；忘记密码可通过邮箱验证码找回")
 
 type unifiedRegistrationKey struct{}
 
@@ -51,7 +51,7 @@ func (s *AuthService) ConfigureUnified(db *sql.DB) {
 	if len(key) < 32 {
 		panic("UNIFIED_ACCOUNT_KEY must contain at least 32 characters")
 	}
-	s.Unified = &identity.Service{DB: db, Key: key, Alias: NormalizeEmailForAliasDedup, Send: s.emailService.SendEmail, CheckEmail: s.checkStoreEmail}
+	s.Unified = &identity.Service{DB: db, Key: key, Alias: NormalizeEmailForAliasDedup, Send: s.emailService.SendEmail, CheckEmail: s.checkStoreEmail, CheckRegistrationEmail: s.validateStoreRegistrationEmail}
 	if s.emailQueueService != nil {
 		s.Unified.Notify = s.emailQueueService.EnqueueAccountNotice
 	}
@@ -70,6 +70,45 @@ func (s *AuthService) ConfigureUnified(db *sql.DB) {
 		repo.SetUnified(s.Unified)
 	}
 }
+
+// StoreRegistrationEmailSuffixes shares only email types, not AI admission,
+// per-domain account quotas, invitations, rewards or business-user records.
+func (s *AuthService) StoreRegistrationEmailSuffixes(ctx context.Context) ([]string, error) {
+	if s.settingService == nil || s.settingService.settingRepo == nil {
+		return nil, ErrServiceUnavailable
+	}
+	raw, err := s.settingService.settingRepo.GetValue(ctx, SettingKeyRegistrationEmailSuffixWhitelist)
+	if errors.Is(err, ErrSettingNotFound) || (err == nil && strings.TrimSpace(raw) == "") {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, ErrServiceUnavailable
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil, ErrServiceUnavailable
+	}
+	suffixes, err := NormalizeRegistrationEmailSuffixWhitelist(values)
+	if err != nil {
+		return nil, ErrServiceUnavailable
+	}
+	if suffixes == nil {
+		suffixes = []string{}
+	}
+	return suffixes, nil
+}
+
+func (s *AuthService) validateStoreRegistrationEmail(ctx context.Context, email string) error {
+	suffixes, err := s.StoreRegistrationEmailSuffixes(ctx)
+	if err != nil {
+		return err
+	}
+	if !IsRegistrationEmailSuffixAllowed(email, suffixes) {
+		return infraerrors.BadRequest("EMAIL_SUFFIX_NOT_ALLOWED", "该邮箱类型暂不支持注册，请使用："+strings.Join(suffixes, "、"))
+	}
+	return nil
+}
+
 func (s *AuthService) RegisterUnified(ctx context.Context, in identity.Input, promo, invite, affiliate string) (*User, error) {
 	if s.Unified == nil {
 		return nil, ErrServiceUnavailable
@@ -95,7 +134,7 @@ func (s *AuthService) RegisterUnified(ctx context.Context, in identity.Input, pr
 	}
 	u, err := s.provisionUnified(ctx, a, in.Password, promo, invite, affiliate)
 	if err != nil {
-		return nil, infraerrors.New(http.StatusServiceUnavailable, "UNIFIED_PROFILE_PENDING", "通用账号已注册，AI 站资料暂未开通。请用同一邮箱和密码重试；如 AI 站已有历史账号，请登录旧账号后在账号安全中关联，原注册验证码无需重复申请")
+		return nil, infraerrors.New(http.StatusServiceUnavailable, "UNIFIED_PROFILE_PENDING", "账号已注册，AI 站资料暂未开通。请用同一邮箱和密码重试；如 AI 站已有历史账号，请登录旧账号后在账号安全中关联，原注册验证码无需重复申请")
 	}
 	return u, nil
 }
@@ -122,7 +161,7 @@ func (s *AuthService) provisionUnified(ctx context.Context, a *identity.Account,
 	if exists, e := s.existsByEmailOrAlias(ctx, a.Email); e != nil {
 		return nil, e
 	} else if exists {
-		return nil, infraerrors.Conflict("LEGACY_ACCOUNT", "AI 站已有历史账号，请登录后在通用账号设置中关联")
+		return nil, infraerrors.Conflict("LEGACY_ACCOUNT", "AI 站已有历史账号，请登录后在个人设置中关联")
 	}
 	ctx = context.WithValue(ctx, unifiedRegistrationKey{}, a.ID)
 	_, u, err := s.RegisterWithVerification(ctx, a.Email, uuid.NewString()+uuid.NewString(), "", promo, invite, affiliate)
@@ -137,6 +176,35 @@ func (s *AuthService) loginUnified(ctx context.Context, email, password string, 
 	if err == nil && u.UnifiedID == "" {
 		if !u.CheckPassword(password) {
 			return "", nil, ErrInvalidCredentials
+		}
+		if !u.IsActive() {
+			return "", nil, ErrUserNotActive
+		}
+		// A verified shared credential and the legacy password must both match.
+		// MFA/admin accounts keep the explicit ownership-confirmation path.
+		if !u.TotpEnabled && u.Role != RoleAdmin {
+			common, e := s.Unified.Lookup(ctx, email)
+			if e != nil {
+				return "", nil, UnifiedError(e)
+			}
+			if common != nil {
+				proven, verifyErr := s.Unified.Verify(ctx, email, password)
+				if verifyErr == nil {
+					_, e = s.Unified.Attach(ctx, identity.Input{Email: proven.Email, Password: password, Site: "ai", LocalID: fmt.Sprint(u.ID), SessionVersion: resolvedTokenVersion(u)})
+					if e != nil {
+						return "", nil, UnifiedError(e)
+					}
+					u, e = s.userRepo.GetByID(ctx, u.ID)
+					if e != nil {
+						return "", nil, e
+					}
+				} else {
+					var typed *identity.Error
+					if !errors.As(verifyErr, &typed) || typed.Code != "INVALID_CREDENTIALS" {
+						return "", nil, UnifiedError(verifyErr)
+					}
+				}
+			}
 		}
 	} else {
 		if err != nil && !errors.Is(err, ErrUserNotFound) {

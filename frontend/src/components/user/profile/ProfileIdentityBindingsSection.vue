@@ -87,8 +87,13 @@
                 </p>
               </div>
 
+              <AccountSecurity
+                v-if="item.provider === 'email' && showEmailForm && useSharedEmailForm"
+                :action="unifiedLinked ? 'email' : 'link'"
+                @updated="emit('updated')"
+              />
               <div
-                v-if="item.provider === 'email' && showEmailForm"
+                v-if="item.provider === 'email' && showEmailForm && !useSharedEmailForm"
                 data-testid="profile-binding-email-form"
                 class="grid gap-2 sm:grid-cols-[minmax(0,1.4fr)_auto]"
               >
@@ -211,15 +216,19 @@ import {
   unbindAuthIdentity,
 } from '@/api/user'
 import Icon from '@/components/icons/Icon.vue'
+import AccountSecurity from '@/components/AccountSecurity.vue'
 import { useAppStore, useAuthStore } from '@/stores'
 import type { User, UserAuthBindingStatus, UserAuthProvider } from '@/types'
 
 type BindableProvider = Exclude<UserAuthProvider, 'email'>
 
+const emit = defineEmits<{ updated: [] }>()
+
 const props = withDefaults(
   defineProps<{
     user: User | null
     unifiedLinked?: boolean
+    unifiedEnabled?: boolean
     linuxdoEnabled?: boolean
     dingtalkEnabled?: boolean
     oidcEnabled?: boolean
@@ -249,6 +258,11 @@ const appStore = useAppStore()
 const authStore = useAuthStore()
 
 const localUser = ref<User | null>(null)
+// OAuth-only users have no current password yet. Preserve their original
+// verified first-email binding flow instead of asking for an unknown password.
+const useSharedEmailForm = computed(() => props.unifiedEnabled && (
+  props.unifiedLinked || !(localUser.value || props.user)?.email?.endsWith('.invalid')
+))
 const isSendingEmailCode = ref(false)
 const isBindingEmail = ref(false)
 const isEmailBindingFormDirty = ref(false)
@@ -560,7 +574,6 @@ function hasBindingDetails(
 }
 
 function toggleEmailForm(): void {
-  if (props.unifiedLinked) { document.getElementById('unified-account-security')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); return }
   isEmailFormExpanded.value = !isEmailFormExpanded.value
 }
 

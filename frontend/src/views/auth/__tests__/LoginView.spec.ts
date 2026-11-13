@@ -2,9 +2,10 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import LoginView from '@/views/auth/LoginView.vue'
 
-const { getPublicSettingsMock, pushMock } = vi.hoisted(() => ({
+const { getPublicSettingsMock, pushMock, loginMock } = vi.hoisted(() => ({
   getPublicSettingsMock: vi.fn(),
-  pushMock: vi.fn()
+  pushMock: vi.fn(),
+  loginMock: vi.fn()
 }))
 
 const publicSettings = {
@@ -50,7 +51,7 @@ vi.mock('vue-i18n', () => ({
 
 vi.mock('@/stores', () => ({
   useAuthStore: () => ({
-    login: vi.fn(),
+    login: loginMock,
     loginWithPasskey: vi.fn(),
     login2FA: vi.fn()
   }),
@@ -94,7 +95,32 @@ describe('LoginView registration entry', () => {
   beforeEach(() => {
     getPublicSettingsMock.mockReset()
     pushMock.mockReset()
+    loginMock.mockReset()
     getPublicSettingsMock.mockResolvedValue(publicSettings)
+  })
+
+  it('only asks for an internal invitation after the server requires first-site activation', async () => {
+    getPublicSettingsMock.mockResolvedValueOnce({ ...publicSettings, password_reset_enabled: true })
+    loginMock.mockRejectedValueOnce({ code: 400, reason: 'INVITATION_CODE_REQUIRED', message: '需要内部邀请码' })
+    const wrapper = mountLogin()
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('首次开通需要内部邀请码')
+    expect(wrapper.text().match(/auth.forgotPassword/g)).toHaveLength(1)
+    expect(wrapper.text()).not.toContain('找回通用密码')
+    await wrapper.get('#email').setValue('new@example.test')
+    await wrapper.get('#password').setValue('Password2026')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(loginMock).toHaveBeenCalled()
+    expect(loginMock.mock.calls[0][0]).not.toHaveProperty('invitation_code')
+    expect(wrapper.text()).toContain('首次开通需要内部邀请码')
+    await wrapper.get('input[placeholder="请输入本站发放的内部邀请码"]').setValue('INTERNAL-CODE')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(loginMock.mock.calls[1][0]).toHaveProperty('invitation_code', 'INTERNAL-CODE')
+    await wrapper.get('#email').setValue('other@example.test')
+    expect(wrapper.text()).not.toContain('首次开通需要内部邀请码')
+    wrapper.unmount()
   })
 
   it('shows the registration entry when registration is enabled', async () => {

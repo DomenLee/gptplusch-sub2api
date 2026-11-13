@@ -71,9 +71,6 @@ func (r *userRepository) create(ctx context.Context, userIn *service.User, guard
 	if userIn == nil {
 		return nil
 	}
-	if r.unified != nil && service.UnifiedRegistration(ctx) == "" && userIn.Role != service.RoleAdmin {
-		return service.ErrUnifiedSettings
-	}
 
 	// 统一使用 ent 的事务：保证用户与允许分组的更新原子化，
 	// 并避免基于 *sql.Tx 手动构造 ent client 导致的 ExecQuerier 断言错误。
