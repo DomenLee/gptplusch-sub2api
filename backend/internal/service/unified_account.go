@@ -183,10 +183,15 @@ func (s *AuthService) LinkUnified(ctx context.Context, userID int64, oldPassword
 func (s *AuthService) checkStoreEmail(ctx context.Context, accountID, email string) error {
 	unavailable := &identity.Error{Code: "STORE_CHECK_UNAVAILABLE", Message: "商城邮箱占用检查暂不可用，请稍后重试；原邮箱保持不变", Status: 503}
 	base, err := url.Parse(os.Getenv("UNIFIED_STORE_URL"))
-	if err != nil || base.Host == "" || (base.Scheme != "https" && !(base.Scheme == "http" && (base.Hostname() == "127.0.0.1" || base.Hostname() == "localhost" || base.Hostname() == "::1"))) {
+	if err != nil || base.Host == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
+		return unavailable
+	}
+	localHTTP := base.Scheme == "http" && (base.Hostname() == "127.0.0.1" || base.Hostname() == "localhost" || base.Hostname() == "::1")
+	if base.Scheme != "https" && !localHTTP {
 		return unavailable
 	}
 	body, _ := json.Marshal(map[string]string{"accountId": accountID, "email": email})
+	// #nosec G704 -- The destination is a validated operator-only environment value with a fixed path; user input is confined to the JSON body.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base.ResolveReference(&url.URL{Path: "/api/auth/unified/email-check"}).String(), bytes.NewReader(body))
 	if err != nil {
 		return unavailable
@@ -194,11 +199,12 @@ func (s *AuthService) checkStoreEmail(ctx context.Context, accountID, email stri
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Unified-Key", s.Unified.Key)
 	client := &http.Client{Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	// #nosec G704 -- Only the configured store receives this request, and redirects are disabled to prevent forwarding the shared key.
 	response, err := client.Do(req)
 	if err != nil {
 		return unavailable
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode == http.StatusConflict {
 		return &identity.Error{Code: "ACCOUNT_CONFLICT", Message: "该邮箱已用于商城其他账号，请更换邮箱或联系平台客服处理", Status: 409}
 	}

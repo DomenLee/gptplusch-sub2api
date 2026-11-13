@@ -139,7 +139,7 @@ func (s *Service) SendCode(ctx context.Context, in Input) (*Challenge, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, email+":"+in.Purpose); err != nil {
 		return nil, err
 	}
@@ -366,7 +366,7 @@ func (s *Service) Register(ctx context.Context, in Input) (*Account, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	replay, err := s.checkCode(ctx, tx, in, "register", email)
 	if err != nil {
 		return nil, err
@@ -442,7 +442,7 @@ func (s *Service) Link(ctx context.Context, in Input) (*Account, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, s.Alias(email)); err != nil {
 		return nil, err
 	}
@@ -517,7 +517,7 @@ func (s *Service) ChangePassword(ctx context.Context, in Input, recovery bool) (
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	action := "password"
 	if recovery {
 		action = "recover"
@@ -589,7 +589,7 @@ func (s *Service) ChangeEmail(ctx context.Context, in Input) (*Account, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	payload := strings.Join([]string{"email", in.AccountID, in.Email, in.Password, fmt.Sprint(in.Version), in.ChallengeID, in.Code, in.OldChallengeID, in.OldCode}, "\x00")
 	if replay, ok, replayErr := s.replayOperation(ctx, tx, in, "email", payload); ok || replayErr != nil {
 		return replay, replayErr

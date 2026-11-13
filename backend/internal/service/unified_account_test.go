@@ -47,7 +47,7 @@ func TestUnifiedStoreEmailCheck(t *testing.T) {
 		})
 	}
 	t.Run("requires secure configured target", func(t *testing.T) {
-		for _, target := range []string{"", "http://example.com", ":invalid"} {
+		for _, target := range []string{"", "http://example.com", ":invalid", "https://user:password@example.com", "https://example.com?target=other", "https://example.com#other"} {
 			t.Setenv("UNIFIED_STORE_URL", target)
 			s := &AuthService{Unified: &identity.Service{Key: "test-key"}}
 			if err := s.checkStoreEmail(context.Background(), "id", "user@example.test"); err == nil {

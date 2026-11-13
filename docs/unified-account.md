@@ -20,7 +20,7 @@
 
 ## 数据库变更
 
-**新增迁移：`backend/migrations/250_unified_accounts.sql`、`backend/migrations/251_unified_account_operations.sql`。** 适用于 PostgreSQL，由现有启动迁移器按文件名顺序执行，接续主线已有的 `247`、`248` 和 `249`。`250` 新增统一账号、站点映射、验证码、限流与审计结构；`251` 新增跨站改密/找回/换邮箱请求的幂等状态表。旧用户/余额/订单表不做批量合并或资产迁移。
+**新增迁移：`backend/migrations/247_unified_accounts.sql`、`backend/migrations/248_unified_account_operations.sql`。** 适用于 PostgreSQL，由现有启动迁移器按文件名顺序执行；迁移器以完整文件名及校验和跟踪记录，同数字前缀的主线迁移不冲突。保留已在测试环境执行的原始文件名和内容。`247_unified_accounts` 新增统一账号、站点映射、验证码、限流与审计结构；`248_unified_account_operations` 新增跨站改密/找回/换邮箱请求的幂等状态表。旧用户/余额/订单表不做批量合并或资产迁移。
 
 正式执行前备份数据库与配置；先迁移 AI，再迁移商城，确认两站代码及服务间配置后启用开关。迁移结构曾在专用本地测试库验证；生产库未操作。迁移检查包括统一邮箱/别名唯一、每站一个本地账号对应一个统一身份、验证码和会话版本隔离。
 
