@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	dbuser "github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/ent/userallowedgroup"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
+	"github.com/Wei-Shaw/sub2api/internal/identity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
@@ -28,8 +30,9 @@ import (
 )
 
 type userRepository struct {
-	client *dbent.Client
-	sql    sqlExecutor
+	unified *identity.Service
+	client  *dbent.Client
+	sql     sqlExecutor
 }
 
 var _ service.RedeemUserAdjustmentRepository = (*userRepository)(nil)
@@ -67,6 +70,9 @@ func (r *userRepository) CreateWithEmailAliasGuardAndDomainLimit(ctx context.Con
 func (r *userRepository) create(ctx context.Context, userIn *service.User, guardEmailAlias bool, domainLimit string) error {
 	if userIn == nil {
 		return nil
+	}
+	if r.unified != nil && service.UnifiedRegistration(ctx) == "" && userIn.Role != service.RoleAdmin {
+		return service.ErrUnifiedSettings
 	}
 
 	// 统一使用 ent 的事务：保证用户与允许分组的更新原子化，
@@ -167,6 +173,12 @@ func (r *userRepository) create(ctx context.Context, userIn *service.User, guard
 		return err
 	}
 
+	if accountID := service.UnifiedRegistration(ctx); accountID != "" {
+		_, err := txAwareSQLExecutor(txCtx, r.sql, r.client).ExecContext(txCtx, `INSERT INTO unified_links(site,local_id,account_id,session_version) VALUES('ai',$1,$2,$3)`, strconv.FormatInt(created.ID, 10), accountID, service.LocalSessionVersion(userEntityToService(created)))
+		if err != nil {
+			return err
+		}
+	}
 	if ownedTx != nil {
 		if err := ownedTx.Commit(); err != nil {
 			return err
@@ -191,7 +203,7 @@ func (r *userRepository) GetByID(ctx context.Context, id int64) (*service.User, 
 	if v, ok := groups[id]; ok {
 		out.AllowedGroups = v
 	}
-	return out, nil
+	return r.unifiedUser(ctx, out)
 }
 
 func (r *userRepository) GetByIDIncludeDeleted(ctx context.Context, id int64) (*service.User, error) {
@@ -208,10 +220,25 @@ func (r *userRepository) GetByIDIncludeDeleted(ctx context.Context, id int64) (*
 	if v, ok := groups[id]; ok {
 		out.AllowedGroups = v
 	}
-	return out, nil
+	return r.unifiedUser(ctx, out)
 }
 
 func (r *userRepository) GetByEmail(ctx context.Context, email string) (*service.User, error) {
+	if r.unified != nil {
+		var localID string
+		err := r.unified.DB.QueryRowContext(ctx, `SELECT l.local_id FROM unified_links l JOIN unified_accounts a ON a.id=l.account_id WHERE l.site='ai' AND a.email=$1`, strings.ToLower(strings.TrimSpace(email))).Scan(&localID)
+		if err == nil {
+			id, e := strconv.ParseInt(localID, 10, 64)
+			if e != nil {
+				return nil, e
+			}
+			return r.GetByID(ctx, id)
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+	}
+
 	matches, err := r.client.User.Query().
 		Where(userEmailLookupPredicate(email)).
 		Order(dbent.Asc(dbuser.FieldID)).
@@ -235,12 +262,28 @@ func (r *userRepository) GetByEmail(ctx context.Context, email string) (*service
 	if v, ok := groups[m.ID]; ok {
 		out.AllowedGroups = v
 	}
-	return out, nil
+	resolved, err := r.unifiedUser(ctx, out)
+	if err != nil {
+		return nil, err
+	}
+	if resolved.UnifiedID != "" && resolved.Email != strings.ToLower(strings.TrimSpace(email)) {
+		return nil, service.ErrUserNotFound
+	}
+	return resolved, nil
 }
 
 func (r *userRepository) Update(ctx context.Context, userIn *service.User, fields service.UserUpdateFields) error {
 	if userIn == nil {
 		return nil
+	}
+	if r.unified != nil && (fields.Email || fields.PasswordHash) {
+		linked, err := r.unified.Linked(ctx, "ai", strconv.FormatInt(userIn.ID, 10))
+		if err != nil {
+			return err
+		}
+		if linked != nil {
+			return service.ErrUnifiedSettings
+		}
 	}
 	// 空掩码代表调用方不改任何列，直接返回，避免产生一次无意义的整行写。
 	if fields.IsEmpty() {
@@ -1467,7 +1510,7 @@ func (r *userRepository) GetFirstAdmin(ctx context.Context) (*service.User, erro
 	if v, ok := groups[m.ID]; ok {
 		out.AllowedGroups = v
 	}
-	return out, nil
+	return r.unifiedUser(ctx, out)
 }
 
 func (r *userRepository) loadAllowedGroups(ctx context.Context, userIDs []int64) (map[int64][]int64, error) {
@@ -1623,4 +1666,32 @@ func (r *userRepository) DisableTotp(ctx context.Context, userID int64) error {
 		return translatePersistenceError(err, service.ErrUserNotFound, nil)
 	}
 	return nil
+}
+
+func (r *userRepository) SetUnified(s *identity.Service) { r.unified = s }
+func (r *userRepository) unifiedUser(ctx context.Context, u *service.User) (*service.User, error) {
+	if r.unified == nil {
+		return u, nil
+	}
+	localID := strconv.FormatInt(u.ID, 10)
+	a, err := r.unified.Linked(ctx, "ai", localID)
+	if err != nil {
+		return nil, err
+	}
+	if a == nil {
+		return u, nil
+	}
+	version, err := r.unified.SessionVersion(ctx, "ai", localID)
+	if err != nil {
+		return nil, err
+	}
+	u.UnifiedID = a.ID
+	u.Email = a.Email
+	u.TokenVersion = version
+	u.TokenVersionResolved = true
+	u.VerifyPassword = func(password string) bool {
+		verified, e := r.unified.Verify(ctx, a.Email, password)
+		return e == nil && verified.ID == a.ID
+	}
+	return u, nil
 }

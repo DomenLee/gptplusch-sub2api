@@ -83,7 +83,7 @@
             </button>
           </div>
           <p class="input-hint">
-            {{ t('auth.passwordHint') }}
+            {{ unifiedEnabled ? '通用密码至少 12 个字符，最多 72 字节；两站分别登录。' : t('auth.passwordHint') }}
           </p>
         </div>
 
@@ -386,6 +386,7 @@ import {
   validatePromoCode,
   validateInvitationCode
 } from '@/api/auth'
+import { apiClient } from '@/api/client'
 import { buildAuthErrorMessage } from '@/utils/authError'
 import { extractApiErrorCode, extractI18nErrorMessage } from '@/utils/apiError'
 import {
@@ -422,6 +423,7 @@ const confirmPassword = ref('')
 
 // Public settings
 const registrationEnabled = ref<boolean>(true)
+const unifiedEnabled = ref(false)
 const emailVerifyEnabled = ref<boolean>(false)
 // Public settings are injected into the app store before Vue mounts. Use that
 // value for the first render so a disabled promo-code field never flashes
@@ -563,6 +565,7 @@ onMounted(async () => {
   syncAffiliateReferralCode()
 
   try {
+    try { unifiedEnabled.value = (await apiClient.get('/auth/unified/config')).data?.enabled === true } catch { /* The backend still enforces its configured registration policy. */ }
     const settings = await getPublicSettings()
     registrationEnabled.value = settings.registration_enabled
     emailVerifyEnabled.value = settings.email_verify_enabled
@@ -961,8 +964,8 @@ function validateForm(): boolean {
   if (!formData.password) {
     errors.password = t('auth.passwordRequired')
     isValid = false
-  } else if (formData.password.length < 6) {
-    errors.password = t('auth.passwordMinLength')
+  } else if (Array.from(formData.password).length < (unifiedEnabled.value ? 12 : 6) || (unifiedEnabled.value && new TextEncoder().encode(formData.password).length > 72)) {
+    errors.password = unifiedEnabled.value ? '密码至少 12 个字符，最多 72 字节' : t('auth.passwordMinLength')
     isValid = false
   }
 

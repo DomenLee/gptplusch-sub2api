@@ -5,6 +5,8 @@
       class="mx-auto max-w-[950px] space-y-6"
     >
       <ProfileInfoCard
+        v-if="user"
+        :unified-linked="unifiedLinked"
         :user="user"
         :linuxdo-enabled="linuxdoOAuthEnabled"
         :dingtalk-enabled="dingtalkOAuthEnabled"
@@ -32,7 +34,8 @@
         </div>
       </div>
 
-      <ProfilePasswordForm />
+      <AccountSecurity @linked="unifiedLinked = $event" />
+      <ProfilePasswordForm v-if="user && !unifiedLinked" />
 
       <ProfileBalanceNotifyCard
         v-if="user && balanceLowNotifyEnabled"
@@ -43,8 +46,8 @@
         :user-email="user.email"
       />
 
-      <ProfileTotpCard />
-      <ProfilePasskeyCard :enabled="passkeyEnabled" />
+      <ProfileTotpCard v-if="user" />
+      <ProfilePasskeyCard v-if="user" :enabled="passkeyEnabled" />
     </div>
   </AppLayout>
 </template>
@@ -56,6 +59,7 @@ import { Icon } from '@/components/icons'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import ProfileBalanceNotifyCard from '@/components/user/profile/ProfileBalanceNotifyCard.vue'
 import ProfileInfoCard from '@/components/user/profile/ProfileInfoCard.vue'
+import AccountSecurity from '@/components/AccountSecurity.vue'
 import ProfilePasswordForm from '@/components/user/profile/ProfilePasswordForm.vue'
 import ProfileTotpCard from '@/components/user/profile/ProfileTotpCard.vue'
 import ProfilePasskeyCard from '@/components/user/profile/ProfilePasskeyCard.vue'
@@ -66,6 +70,7 @@ import { useAuthStore } from '@/stores/auth'
 const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const unifiedLinked = ref(false)
 const user = computed(() => authStore.user)
 
 const contactInfo = ref('')

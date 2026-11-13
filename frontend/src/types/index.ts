@@ -115,6 +115,7 @@ export interface AdminUser extends User {
 }
 
 export interface LoginRequest {
+  invitation_code?: string
   email: string
   password: string
   turnstile_token?: string
@@ -134,6 +135,8 @@ export interface ActionCaptchaRequestProof extends Partial<TencentCaptchaRequest
 }
 
 export interface RegisterRequest {
+  challenge_id?: string
+  request_id?: string
   email: string
   password: string
   verify_code?: string
@@ -181,6 +184,8 @@ export interface SendVerifyCodeRequest {
 }
 
 export interface SendVerifyCodeResponse {
+  challengeId?: string
+  retryAfter?: number
   message: string
   countdown: number
 }

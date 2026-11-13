@@ -16,6 +16,7 @@ import (
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/identity"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 
@@ -71,6 +72,7 @@ type JWTClaims struct {
 
 // AuthService 认证服务
 type AuthService struct {
+	Unified               *identity.Service
 	entClient             *dbent.Client
 	userRepo              UserRepository
 	redeemRepo            RedeemCodeRepository
@@ -171,6 +173,9 @@ func (s *AuthService) Register(ctx context.Context, email, password string) (str
 
 // RegisterWithVerification 用户注册（支持邮件验证、优惠码、邀请码和邀请返利码），返回token和用户。
 func (s *AuthService) RegisterWithVerification(ctx context.Context, email, password, verifyCode, promoCode, invitationCode, affiliateCode string) (string, *User, error) {
+	if s.Unified != nil && UnifiedRegistration(ctx) == "" {
+		return "", nil, infraerrors.BadRequest("EMAIL_VERIFY_REQUIRED", "请通过邮箱验证码完成通用账号注册")
+	}
 	// 检查是否开放注册（默认关闭：settingService 未配置时不允许注册）
 	if s.settingService == nil || !s.settingService.IsRegistrationEnabled(ctx) {
 		return "", nil, ErrRegDisabled
@@ -201,7 +206,7 @@ func (s *AuthService) RegisterWithVerification(ctx context.Context, email, passw
 	}
 
 	// 检查是否需要邮件验证
-	if s.settingService != nil && s.settingService.IsEmailVerifyEnabled(ctx) {
+	if s.settingService != nil && s.settingService.IsEmailVerifyEnabled(ctx) && UnifiedRegistration(ctx) == "" {
 		// 如果邮件验证已开启但邮件服务未配置，拒绝注册
 		// 这是一个配置错误，不应该允许绕过验证
 		if s.emailService == nil {
@@ -407,7 +412,7 @@ func (s *AuthService) SendVerifyCodeAsync(ctx context.Context, email string, loc
 // 当邮箱验证开启且已提交验证码时，说明验证码发送阶段已完成验证码校验，
 // 此处跳过二次校验，避免一次性 token 在注册提交时重复使用导致误报失败。
 func (s *AuthService) VerifyCaptchaForRegister(ctx context.Context, proof CaptchaProof, remoteIP, verifyCode string) error {
-	if s.IsEmailVerifyEnabled(ctx) && strings.TrimSpace(verifyCode) != "" {
+	if (s.Unified != nil || s.IsEmailVerifyEnabled(ctx)) && strings.TrimSpace(verifyCode) != "" {
 		logger.LegacyPrintf("service.auth", "%s", "[Auth] Email verify flow detected, skip duplicate captcha check on register")
 		return nil
 	}
@@ -542,7 +547,10 @@ func (s *AuthService) IsEmailVerifyEnabled(ctx context.Context) bool {
 }
 
 // Login 用户登录，返回JWT token
-func (s *AuthService) Login(ctx context.Context, email, password string) (string, *User, error) {
+func (s *AuthService) Login(ctx context.Context, email, password string, invitation ...string) (string, *User, error) {
+	if s.Unified != nil {
+		return s.loginUnified(ctx, email, password, invitation...)
+	}
 	// 查找用户
 	user, err := s.userRepo.GetByEmail(ctx, email)
 	if err != nil {
@@ -1667,6 +1675,9 @@ func (s *AuthService) ResetPassword(ctx context.Context, email, token, newPasswo
 		return ErrUserNotActive
 	}
 
+	if user.UnifiedID != "" {
+		return infraerrors.BadRequest("USE_UNIFIED_RECOVERY", "请使用通用账号的邮箱验证码找回密码")
+	}
 	// Hash new password
 	hashedPassword, err := s.HashPassword(newPassword)
 	if err != nil {
@@ -1925,6 +1936,11 @@ func (s *AuthService) RevokeAllUserSessions(ctx context.Context, userID int64) e
 // 会话撤销由下面的 refresh session 清理承担；改密路径通过 password_hash 变化
 // 改变指纹，从而使旧 token 失效。
 func (s *AuthService) RevokeAllUserTokens(ctx context.Context, userID int64) error {
+	if s.Unified != nil {
+		if err := s.Unified.Revoke(ctx, "ai", fmt.Sprint(userID)); err != nil {
+			return err
+		}
+	}
 	if _, err := s.userRepo.GetByID(ctx, userID); err != nil {
 		return fmt.Errorf("get user: %w", err)
 	}

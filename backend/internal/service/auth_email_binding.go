@@ -52,7 +52,10 @@ func (s *AuthService) BindEmailIdentity(
 	if firstRealEmailBind && len(password) < 6 {
 		return nil, infraerrors.BadRequest("PASSWORD_TOO_SHORT", "password must be at least 6 characters")
 	}
-	if !firstRealEmailBind && !s.CheckPassword(password, currentUser.PasswordHash) {
+	if currentUser.UnifiedID != "" {
+		return nil, ErrUnifiedSettings
+	}
+	if !firstRealEmailBind && !currentUser.CheckPassword(password) {
 		return nil, ErrPasswordIncorrect
 	}
 

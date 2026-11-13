@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 
@@ -279,7 +280,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 	weChatEnabled, weChatOpenEnabled, weChatMPEnabled, weChatMobileEnabled := s.weChatOAuthCapabilitiesFromSettings(settings)
 
 	// Password reset requires email verification to be enabled
-	emailVerifyEnabled := settings[SettingKeyEmailVerifyEnabled] == "true"
+	emailVerifyEnabled := os.Getenv("UNIFIED_ACCOUNT_ENABLED") == "true" || settings[SettingKeyEmailVerifyEnabled] == "true"
 	passwordResetEnabled := emailVerifyEnabled && settings[SettingKeyPasswordResetEnabled] == "true"
 	registrationEmailSuffixWhitelist := ParseRegistrationEmailSuffixWhitelist(
 		settings[SettingKeyRegistrationEmailSuffixWhitelist],
