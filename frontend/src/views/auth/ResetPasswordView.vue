@@ -122,6 +122,7 @@
         </div>
 
         <!-- Confirm Password Input -->
+        <p v-if="unified" class="input-hint">新密码至少 12 个字符，两站下次登录均使用新密码。</p>
         <div>
           <label for="confirmPassword" class="input-label">
             {{ t('auth.confirmPassword') }}
@@ -207,6 +208,7 @@ import { AuthLayout } from '@/components/layout'
 import Icon from '@/components/icons/Icon.vue'
 import { useAppStore } from '@/stores'
 import { resetPassword } from '@/api/auth'
+import { getAccountConfig } from '@/api/account'
 
 const { t } = useI18n()
 
@@ -222,6 +224,8 @@ const isSuccess = ref<boolean>(false)
 const errorMessage = ref<string>('')
 const showPassword = ref<boolean>(false)
 const showConfirmPassword = ref<boolean>(false)
+const unified = ref(false)
+const configLoaded = ref(false)
 
 // URL parameters
 const email = ref<string>('')
@@ -252,13 +256,20 @@ const isInvalidLink = computed(() => !email.value || !token.value)
 
 // ==================== Lifecycle ====================
 
-onMounted(() => {
+onMounted(async () => {
   // Get email and token from URL query parameters
   email.value = (route.query.email as string) || ''
   token.value = (route.query.token as string) || ''
 
   if (!email.value || !token.value) {
     appStore.showError(t('auth.invalidResetLink'))
+  }
+  try {
+    unified.value = (await getAccountConfig()).enabled
+    configLoaded.value = true
+  } catch {
+    errorMessage.value = '账号配置读取失败，请刷新页面后重试'
+    appStore.showError(errorMessage.value)
   }
 })
 
@@ -274,8 +285,8 @@ function validateForm(): boolean {
   if (!formData.password) {
     errors.password = t('auth.passwordRequired')
     isValid = false
-  } else if (formData.password.length < 6) {
-    errors.password = t('auth.passwordMinLength')
+  } else if (Array.from(formData.password).length < (unified.value ? 12 : 6) || (unified.value && new TextEncoder().encode(formData.password).length > 72)) {
+    errors.password = unified.value ? '新密码至少 12 个字符；中文或特殊字符较多时请适当缩短。' : t('auth.passwordMinLength')
     isValid = false
   }
 
@@ -294,6 +305,7 @@ function validateForm(): boolean {
 // ==================== Form Handlers ====================
 
 async function handleSubmit(): Promise<void> {
+  if (!configLoaded.value || isLoading.value) return
   errorMessage.value = ''
 
   if (!validateForm()) {

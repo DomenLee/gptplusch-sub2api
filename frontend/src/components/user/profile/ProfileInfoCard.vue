@@ -138,6 +138,8 @@
         >
           <ProfileIdentityBindingsSection
             :unified-linked="unifiedLinked"
+            :unified-enabled="unifiedEnabled"
+            @updated="emit('accountUpdated')"
             :user="user"
             :linuxdo-enabled="linuxdoEnabled"
             :dingtalk-enabled="dingtalkEnabled"
@@ -189,9 +191,12 @@ import ProfileEditForm from '@/components/user/profile/ProfileEditForm.vue'
 import ProfileIdentityBindingsSection from '@/components/user/profile/ProfileIdentityBindingsSection.vue'
 import type { User, UserAuthBindingStatus, UserAuthProvider, UserProfileSourceContext } from '@/types'
 
+const emit = defineEmits<{ accountUpdated: [] }>()
+
 const props = withDefaults(defineProps<{
   user: User | null
   unifiedLinked?: boolean
+  unifiedEnabled?: boolean
   linuxdoEnabled?: boolean
   dingtalkEnabled?: boolean
   oidcEnabled?: boolean

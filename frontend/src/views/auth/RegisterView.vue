@@ -83,7 +83,7 @@
             </button>
           </div>
           <p class="input-hint">
-            {{ unifiedEnabled ? '通用密码至少 12 个字符，最多 72 字节；两站分别登录。' : t('auth.passwordHint') }}
+            {{ unifiedEnabled ? '密码至少 12 个字符。' : t('auth.passwordHint') }}
           </p>
         </div>
 
@@ -386,7 +386,7 @@ import {
   validatePromoCode,
   validateInvitationCode
 } from '@/api/auth'
-import { apiClient } from '@/api/client'
+import { getAccountConfig } from '@/api/account'
 import { buildAuthErrorMessage } from '@/utils/authError'
 import { extractApiErrorCode, extractI18nErrorMessage } from '@/utils/apiError'
 import {
@@ -565,7 +565,7 @@ onMounted(async () => {
   syncAffiliateReferralCode()
 
   try {
-    try { unifiedEnabled.value = (await apiClient.get('/auth/unified/config')).data?.enabled === true } catch { /* The backend still enforces its configured registration policy. */ }
+    try { unifiedEnabled.value = (await getAccountConfig()).enabled } catch { /* The backend still enforces its configured registration policy. */ }
     const settings = await getPublicSettings()
     registrationEnabled.value = settings.registration_enabled
     emailVerifyEnabled.value = settings.email_verify_enabled
@@ -965,7 +965,7 @@ function validateForm(): boolean {
     errors.password = t('auth.passwordRequired')
     isValid = false
   } else if (Array.from(formData.password).length < (unifiedEnabled.value ? 12 : 6) || (unifiedEnabled.value && new TextEncoder().encode(formData.password).length > 72)) {
-    errors.password = unifiedEnabled.value ? '密码至少 12 个字符，最多 72 字节' : t('auth.passwordMinLength')
+    errors.password = unifiedEnabled.value ? '密码至少 12 个字符；中文或特殊字符较多时请适当缩短' : t('auth.passwordMinLength')
     isValid = false
   }
 

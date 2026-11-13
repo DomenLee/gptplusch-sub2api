@@ -87,4 +87,26 @@ describe('UserEditModal concurrency', () => {
     expect(showError).toHaveBeenCalledWith('admin.users.concurrencyNonNegative')
     expect(update).not.toHaveBeenCalled()
   })
+
+  it('guides shared credential recovery while preserving other admin edits', async () => {
+    const wrapper = mountModal(3)
+    await wrapper.setProps({ user: { ...wrapper.props('user'), shared_credentials: true } as never })
+    expect(wrapper.text()).toContain('忘记密码可在登录页通过邮箱找回')
+    expect(wrapper.get('input[type="email"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('input[placeholder="admin.users.enterNewPassword"]').exists()).toBe(false)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(update).toHaveBeenCalledWith(7, expect.objectContaining({ concurrency: 3 }))
+    expect(update.mock.calls[0][1]).not.toHaveProperty('password')
+  })
+
+  it('shows a failed save with the affected account inside the dialog', async () => {
+    update.mockRejectedValueOnce({ message: 'service unavailable' })
+    const wrapper = mountModal(3)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('账号 user@example.test 保存失败')
+    expect(wrapper.get('[role="alert"]').text()).toContain('请检查后重试')
+    expect(wrapper.emitted('success')).toBeFalsy()
+  })
 })

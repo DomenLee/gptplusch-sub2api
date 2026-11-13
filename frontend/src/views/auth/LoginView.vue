@@ -1,6 +1,5 @@
 <template>
   <AuthLayout>
-    <RouterLink v-if="unifiedEnabled" to="/recover-account" class="mb-4 block text-center text-primary-600">邮箱验证码找回通用密码</RouterLink>
     <div class="space-y-6">
       <!-- Title -->
       <div class="text-center">
@@ -37,8 +36,8 @@
           </div>
         </div>
 
-        <label v-if="unifiedEnabled" class="input-label">AI 首次使用邀请码（站点要求时填写）
-          <input v-model.trim="invitationCode" class="input mt-2" placeholder="已有 AI 账号无需填写" autocomplete="off" />
+        <label v-if="needsInvitation" class="input-label">首次开通需要内部邀请码
+          <input v-model.trim="invitationCode" class="input mt-2" placeholder="请输入本站发放的内部邀请码" autocomplete="off" />
         </label>
         <!-- Password Input -->
         <div>
@@ -226,7 +225,6 @@
 </template>
 
 <script setup lang="ts">
-import { apiClient } from '@/api/client'
 import { computed, ref, reactive, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -330,7 +328,7 @@ const totpTempToken = ref<string>('')
 const totpUserEmailMasked = ref<string>('')
 const totpModalRef = ref<InstanceType<typeof TotpLoginModal> | null>(null)
 
-const unifiedEnabled = ref(false)
+const needsInvitation = ref(false)
 const invitationCode = ref('')
 const formData = reactive({
   email: '',
@@ -376,10 +374,11 @@ watch(validationToastMessage, (value, previousValue) => {
   }
 })
 
+watch(() => formData.email, () => { needsInvitation.value = false; invitationCode.value = '' })
+
 // ==================== Lifecycle ====================
 
 onMounted(async () => {
-  try { unifiedEnabled.value = (await apiClient.get('/auth/unified/config')).data.enabled } catch { /* Keep existing login methods. */ }
   const expiredFlag = sessionStorage.getItem('auth_expired')
   if (expiredFlag) {
     sessionStorage.removeItem('auth_expired')
@@ -588,7 +587,7 @@ async function handleLogin(): Promise<void> {
     const response = await authStore.login({
       email: formData.email,
       password: formData.password,
-      invitation_code: invitationCode.value || undefined,
+      ...(needsInvitation.value ? { invitation_code: invitationCode.value || undefined } : {}),
       turnstile_token:
         turnstileEnabled.value || aliyunCaptchaEnabled.value ? turnstileToken.value : undefined,
       tencent_captcha_ticket: tencentCaptchaEnabled.value ? turnstileToken.value : undefined,
@@ -615,6 +614,8 @@ async function handleLogin(): Promise<void> {
     const redirectTo = (router.currentRoute.value.query.redirect as string) || '/dashboard'
     await router.push(redirectTo)
   } catch (error: unknown) {
+    const code = (error as any).reason || (error as any).code || (error as any).response?.data?.reason || (error as any).response?.data?.code
+    if (code === 'INVITATION_CODE_REQUIRED') needsInvitation.value = true
     errorMessage.value = extractI18nErrorMessage(error, t, 'auth.errors', t('auth.loginFailed'))
 
     // Also show error toast

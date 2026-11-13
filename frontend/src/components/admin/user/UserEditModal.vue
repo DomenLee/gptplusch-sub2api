@@ -6,11 +6,13 @@
     @close="$emit('close')"
   >
     <form v-if="user" id="edit-user-form" @submit.prevent="handleUpdateUser" class="space-y-5">
+      <p v-if="saveError" ref="errorElement" role="alert" class="sticky top-0 z-10 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/30 dark:text-red-300">{{ saveError }}</p>
       <div>
         <label class="input-label">{{ t('admin.users.email') }}</label>
-        <input v-model="form.email" type="email" class="input" />
+        <input v-model="form.email" type="email" class="input" :disabled="user.shared_credentials" />
       </div>
-      <div>
+      <p v-if="user.shared_credentials" role="status" class="input-hint">账号 {{ user.email }} 已共用两站凭据。邮箱和密码请由用户在个人设置修改，忘记密码可在登录页通过邮箱找回；其他本站资料仍可在此编辑。</p>
+      <div v-else>
         <label class="input-label">{{ t('admin.users.password') }}</label>
         <div class="flex gap-2">
           <div class="relative flex-1">
@@ -83,7 +85,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, reactive, watch } from 'vue'
+import { computed, nextTick, ref, reactive, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useClipboard } from '@/composables/useClipboard'
@@ -101,6 +103,8 @@ const emit = defineEmits(['close', 'success'])
 const { t } = useI18n(); const appStore = useAppStore(); const { copyToClipboard } = useClipboard()
 
 const submitting = ref(false); const passwordCopied = ref(false)
+const saveError = ref('')
+const errorElement = ref<HTMLElement>()
 const roleOptions = computed(() => [
   { value: 'user', label: t('admin.users.roles.user') },
   { value: 'admin', label: t('admin.users.roles.admin') }
@@ -117,6 +121,7 @@ const form = reactive({
 })
 
 watch(() => props.user, (u) => {
+  saveError.value = ''
   if (u) {
     Object.assign(form, { email: u.email, password: '', username: u.username || '', notes: u.notes || '', role: u.role || 'user', concurrency: u.concurrency, rpm_limit: u.rpm_limit ?? 0, customAttributes: {} })
     passwordCopied.value = false
@@ -137,6 +142,7 @@ const stepUp = useStepUp()
 
 const handleUpdateUser = async () => {
   if (!props.user) return
+  saveError.value = ''
   if (!form.email.trim()) {
     appStore.showError(t('admin.users.emailRequired'))
     return
@@ -150,7 +156,7 @@ const handleUpdateUser = async () => {
   submitting.value = true
   try {
     const data: any = { email: form.email, username: form.username, notes: form.notes, role: form.role, concurrency: form.concurrency, rpm_limit: form.rpm_limit }
-    if (form.password.trim()) data.password = form.password.trim()
+    if (!props.user.shared_credentials && form.password.trim()) data.password = form.password.trim()
     // 提升为管理员属敏感操作：后端返回 STEP_UP_REQUIRED 时弹 TOTP 验证并重试
     await stepUp.run(() => adminAPI.users.update(userId, data))
     if (Object.keys(form.customAttributes).length > 0) await adminAPI.userAttributes.updateUserAttributeValues(userId, form.customAttributes)
@@ -166,7 +172,9 @@ const handleUpdateUser = async () => {
           : t('stepUp.notEnabled')
       )
     } else {
-      appStore.showError(e?.message || t('admin.users.failedToUpdate'))
+      saveError.value = `账号 ${props.user.email} 保存失败：${e?.message || t('admin.users.failedToUpdate')}，请检查后重试`
+      await nextTick()
+      errorElement.value?.scrollIntoView?.({ block: 'nearest' })
     }
   } finally { submitting.value = false }
 }

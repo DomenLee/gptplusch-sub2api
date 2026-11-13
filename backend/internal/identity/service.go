@@ -64,13 +64,14 @@ type Challenge struct {
 	RetryAfter int    `json:"retryAfter"`
 }
 type Service struct {
-	CheckEmail func(context.Context, string, string) error
-	Notify     func(string, string, string) error
-	DB         *sql.DB
-	Key        string
-	Send       func(context.Context, string, string, string) error
-	Alias      func(string) string
-	Legacy     func(context.Context, string) (bool, error)
+	CheckRegistrationEmail func(context.Context, string) error
+	CheckEmail             func(context.Context, string, string) error
+	Notify                 func(string, string, string) error
+	DB                     *sql.DB
+	Key                    string
+	Send                   func(context.Context, string, string, string) error
+	Alias                  func(string) string
+	Legacy                 func(context.Context, string) (bool, error)
 }
 
 func Email(value string) (string, error) {
@@ -115,10 +116,15 @@ func (s *Service) SendCode(ctx context.Context, in Input) (*Challenge, error) {
 	if err != nil {
 		return nil, err
 	}
-	labels := map[string]string{"register": "注册账号", "link": "关联已有账号", "recover": "找回通用密码", "email-old": "确认原邮箱", "email-new": "验证新邮箱"}
+	labels := map[string]string{"register": "注册账号", "link": "关联已有账号", "recover": "找回登录密码", "email-old": "确认原邮箱", "email-new": "验证新邮箱"}
 	label, ok := labels[in.Purpose]
 	if !ok {
 		return nil, fail("PURPOSE_INVALID", "验证码用途无效", 400)
+	}
+	if in.Site == "store" && in.Purpose == "register" && s.CheckRegistrationEmail != nil {
+		if err = s.CheckRegistrationEmail(ctx, email); err != nil {
+			return nil, err
+		}
 	}
 	if err = s.Rate(ctx, "email-hour:"+email, 5, time.Hour); err != nil {
 		return nil, err
@@ -355,7 +361,7 @@ func (s *Service) Register(ctx context.Context, in Input) (*Account, error) {
 			return nil, e
 		}
 		if exists {
-			return nil, fail("LEGACY_ACCOUNT", "AI 站已有历史账号，请先登录 AI 站完成账号升级", 409)
+			return nil, fail("LEGACY_ACCOUNT", "AI 站已有历史账号，请先登录 AI 站验证账号邮箱", 409)
 		}
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
@@ -374,6 +380,13 @@ func (s *Service) Register(ctx context.Context, in Input) (*Account, error) {
 	if replay != "" {
 		_ = tx.Rollback()
 		return s.Verify(ctx, email, in.Password)
+	}
+	// Re-read the current policy before creating a new identity. Completed
+	// registration retries and existing-account actions retain their behavior.
+	if in.Site == "store" && s.CheckRegistrationEmail != nil {
+		if err = s.CheckRegistrationEmail(ctx, email); err != nil {
+			return nil, err
+		}
 	}
 	id := uuid.NewString()
 	if _, err = tx.ExecContext(ctx, `INSERT INTO unified_accounts(id,email,alias_key,password_hash) VALUES($1,$2,$3,$4)`, id, email, s.Alias(email), string(hash)); err != nil {
@@ -451,15 +464,6 @@ func (s *Service) Link(ctx context.Context, in Input) (*Account, error) {
 	}
 	a, hash, err := scanAccount(tx.QueryRowContext(ctx, `SELECT `+accountColumns+` FROM unified_accounts a WHERE email=$1 FOR UPDATE`, email))
 	if errors.Is(err, sql.ErrNoRows) {
-		if in.Site == "store" && s.Legacy != nil {
-			exists, e := s.Legacy(ctx, email)
-			if e != nil {
-				return nil, e
-			}
-			if exists {
-				return nil, fail("LEGACY_ACCOUNT", "请先在 AI 站登录并升级旧账号，再返回商城关联", 409)
-			}
-		}
 		if err = Password(in.Password); err != nil {
 			return nil, err
 		}
@@ -499,6 +503,16 @@ func (s *Service) Link(ctx context.Context, in Input) (*Account, error) {
 }
 
 func (s *Service) ChangePassword(ctx context.Context, in Input, recovery bool) (*Account, error) {
+	return s.changePassword(ctx, in, recovery, false)
+}
+
+// ResetVerifiedPassword is only called by the existing AI reset-link flow after
+// its one-time email token has been consumed. It is not an HTTP action.
+func (s *Service) ResetVerifiedPassword(ctx context.Context, email, password string) (*Account, error) {
+	return s.changePassword(ctx, Input{Email: email, NewPassword: password, Site: "ai", RequestID: uuid.NewString()}, true, true)
+}
+
+func (s *Service) changePassword(ctx context.Context, in Input, recovery, emailProved bool) (*Account, error) {
 	if !recovery && len(in.Password) > 72 {
 		return nil, Invalid
 	}
@@ -534,8 +548,10 @@ func (s *Service) ChangePassword(ctx context.Context, in Input, recovery bool) (
 		return nil, err
 	}
 	if recovery {
-		if _, err = s.checkCode(ctx, tx, in, "recover", email); err != nil {
-			return nil, err
+		if !emailProved {
+			if _, err = s.checkCode(ctx, tx, in, "recover", email); err != nil {
+				return nil, err
+			}
 		}
 	} else {
 		if a.ID != in.AccountID || bcrypt.CompareHashAndPassword([]byte(old), []byte(in.Password)) != nil {
@@ -548,7 +564,7 @@ func (s *Service) ChangePassword(ctx context.Context, in Input, recovery bool) (
 	if _, err = tx.ExecContext(ctx, `UPDATE unified_accounts SET password_hash=$2,version=version+1,updated_at=NOW() WHERE id=$1`, a.ID, string(hash)); err != nil {
 		return nil, err
 	}
-	if recovery {
+	if recovery && !emailProved {
 		if _, err = tx.ExecContext(ctx, `UPDATE unified_codes SET used_at=NOW() WHERE id=$1`, in.ChallengeID); err != nil {
 			return nil, err
 		}
@@ -569,7 +585,7 @@ func (s *Service) ChangePassword(ctx context.Context, in Input, recovery bool) (
 	}
 	updated, err := s.Get(ctx, a.ID)
 	if err == nil {
-		s.notify(updated, []string{a.Email}, "通用密码已修改")
+		s.notify(updated, []string{a.Email}, "登录密码已修改")
 	}
 	return updated, err
 }
@@ -649,7 +665,7 @@ func (s *Service) ChangeEmail(ctx context.Context, in Input) (*Account, error) {
 	}
 	updated, err := s.Get(ctx, a.ID)
 	if err == nil {
-		s.notify(updated, []string{a.Email, email}, "通用账号邮箱已修改")
+		s.notify(updated, []string{a.Email, email}, "账号邮箱已修改")
 	}
 	return updated, err
 }

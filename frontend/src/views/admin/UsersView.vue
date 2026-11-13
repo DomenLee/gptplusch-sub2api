@@ -1732,12 +1732,21 @@ const applyFilter = () => {
   loadUsers()
 }
 
-const handleEdit = (user: AdminUser) => {
-  editingUser.value = user
-  showEditModal.value = true
+let editRequest = 0
+const handleEdit = async (user: AdminUser) => {
+  const request = ++editRequest
+  try {
+    const current = await adminAPI.users.getById(user.id)
+    if (request !== editRequest) return
+    editingUser.value = current
+    showEditModal.value = true
+  } catch {
+    if (request === editRequest) appStore.showError(`账号 ${user.email} 的资料读取失败，请重新点击编辑`)
+  }
 }
 
 const closeEditModal = () => {
+  editRequest++
   showEditModal.value = false
   editingUser.value = null
 }
@@ -1904,6 +1913,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  editRequest++
   document.removeEventListener('click', handleClickOutside)
   window.removeEventListener('scroll', handleScroll, true)
   clearTimeout(searchTimeout)

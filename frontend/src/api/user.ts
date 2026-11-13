@@ -51,14 +51,16 @@ export async function updateProfile(profile: {
  */
 export async function changePassword(
   oldPassword: string,
-  newPassword: string
-): Promise<{ message: string }> {
+  newPassword: string,
+  proof?: { request_id: string; credential_version: number; totp_code: string }
+): Promise<{ message: string; reauthenticate?: boolean }> {
   const payload: ChangePasswordRequest = {
     old_password: oldPassword,
-    new_password: newPassword
+    new_password: newPassword,
+    ...proof
   }
 
-  const { data } = await apiClient.put<{ message: string }>('/user/password', payload)
+  const { data } = await apiClient.put<{ message: string; reauthenticate?: boolean }>('/user/password', payload)
   return data
 }
 

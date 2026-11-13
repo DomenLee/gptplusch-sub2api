@@ -12,6 +12,7 @@ import (
 	middleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 func unifiedResponse(c *gin.Context, value any, err error) {
@@ -63,6 +64,13 @@ func (h *AuthHandler) internalUnified(c *gin.Context) {
 	}
 	in.Site = "store"
 	ctx := c.Request.Context()
+	if c.Param("action") == "registration-policy" {
+		// A read-only page config must not share the empty-email credential
+		// rate bucket across every visitor. Service authentication still applies.
+		suffixes, err := h.authService.StoreRegistrationEmailSuffixes(ctx)
+		unifiedResponse(c, gin.H{"emailSuffixes": suffixes}, err)
+		return
+	}
 	var v any
 	var err error
 	if err = s.Rate(ctx, "store:"+in.Email+":"+in.LocalID, 60, time.Minute); err != nil {
@@ -161,9 +169,13 @@ func (h *AuthHandler) unifiedStatus(c *gin.Context) {
 		unifiedResponse(c, nil, err)
 		return
 	}
-	unifiedResponse(c, gin.H{"account": a, "requiresMfa": u.TotpEnabled}, nil)
+	unifiedResponse(c, gin.H{"account": a, "email": u.Email, "requiresMfa": u.TotpEnabled}, nil)
 }
 func (h *AuthHandler) updateUnified(c *gin.Context) {
+	if c.Param("action") == "logout-all" {
+		h.RevokeAllSessions(c)
+		return
+	}
 	if !h.unifiedAvailable(c) {
 		return
 	}
@@ -237,8 +249,6 @@ func (h *AuthHandler) updateUnified(c *gin.Context) {
 			v, err = s.ChangePassword(ctx, req.Input, false)
 		case "email":
 			v, err = s.ChangeEmail(ctx, req.Input)
-		case "logout-all":
-			err = h.authService.RevokeAllUserTokens(ctx, u.ID)
 		default:
 			c.AbortWithStatus(404)
 			return
@@ -249,4 +259,71 @@ func (h *AuthHandler) updateUnified(c *gin.Context) {
 		_ = h.authService.RevokeAllUserSessions(ctx, u.ID)
 	}
 	unifiedResponse(c, v, err)
+}
+
+// ChangeUserPassword keeps the original profile endpoint and its legacy branch.
+func (h *AuthHandler) ChangeUserPassword(c *gin.Context) {
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok {
+		c.AbortWithStatus(http.StatusUnauthorized)
+		return
+	}
+	var req struct {
+		OldPassword string `json:"old_password" binding:"required"`
+		NewPassword string `json:"new_password" binding:"required,min=6"`
+		TotpCode    string `json:"totp_code"`
+		RequestID   string `json:"request_id"`
+		Version     int64  `json:"credential_version"`
+	}
+	if c.ShouldBindJSON(&req) != nil {
+		response.BadRequest(c, "请填写当前密码和新密码")
+		return
+	}
+	u, err := h.userService.GetByID(c.Request.Context(), subject.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if u.UnifiedID == "" {
+		err = h.userService.ChangePassword(c.Request.Context(), u.ID, service.ChangePasswordRequest{CurrentPassword: req.OldPassword, NewPassword: req.NewPassword})
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		response.Success(c, gin.H{"message": "密码已修改"})
+		return
+	}
+	s := h.authService.Unified
+	if s == nil {
+		response.ErrorFrom(c, service.ErrServiceUnavailable)
+		return
+	}
+	if u.TotpEnabled {
+		if h.totpService == nil {
+			response.ErrorFrom(c, service.ErrServiceUnavailable)
+			return
+		}
+		if err = h.totpService.VerifyCode(c.Request.Context(), u.ID, req.TotpCode); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+	}
+	a, err := s.Get(c.Request.Context(), u.UnifiedID)
+	if err != nil {
+		unifiedResponse(c, nil, err)
+		return
+	}
+	if req.RequestID == "" {
+		req.RequestID = uuid.NewString()
+	}
+	if req.Version == 0 {
+		req.Version = a.Version
+	}
+	_, err = s.ChangePassword(c.Request.Context(), identity.Input{Email: a.Email, AccountID: a.ID, Password: req.OldPassword, NewPassword: req.NewPassword, Version: req.Version, RequestID: req.RequestID, Site: "ai"}, false)
+	if err != nil {
+		unifiedResponse(c, nil, err)
+		return
+	}
+	_ = h.authService.RevokeAllUserSessions(c.Request.Context(), u.ID)
+	response.Success(c, gin.H{"message": "密码已更新，请重新登录本站", "reauthenticate": true})
 }
